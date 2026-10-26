@@ -1,0 +1,25 @@
+{
+  "name": "relay",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vp run @relay/extension#dev",
+    "build": "vp run -r build",
+    "test": "vp run -r test",
+    "check": "vp check",
+    "prepare": "vp config"
+  },
+  "devDependencies": {
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "devEngines": {
+    "packageManager": {
+      "name": "pnpm",
+      "version": "12.4.2",
+      "onFail": "download"
+    }
+  }
+}

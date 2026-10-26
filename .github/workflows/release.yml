@@ -1,0 +1,81 @@
+name: Release
+
+# Releases the version in apps/extension/package.json, which is also the manifest version.
+# Releases are immutable once published, so the extension is attached to a draft first and
+# the tag is created only when the draft is published.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+
+jobs:
+  release:
+    name: Build and publish extension
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      - name: Check version
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(node -p "require('./apps/extension/package.json').version")
+          # Chrome extension versions are dot-separated integers only.
+          if ! [[ $version =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version in apps/extension/package.json: $version"
+            exit 1
+          fi
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/v$version" --silent 2> /dev/null; then
+            echo "::error::v$version is already released. Bump the version in apps/extension/package.json."
+            exit 1
+          fi
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "TAG=v$version" >> "$GITHUB_ENV"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build extension
+        run: pnpm --filter @relay/extension build
+
+      - name: Check manifest version
+        run: |
+          manifest=$(node -p "require('./apps/extension/dist/manifest.json').version")
+          if [ "$manifest" != "$VERSION" ]; then
+            echo "::error::Manifest version $manifest does not match package.json version $VERSION"
+            exit 1
+          fi
+
+      - name: Package extension
+        run: |
+          cd apps/extension/dist
+          zip -qr "$GITHUB_WORKSPACE/relay-extension-$TAG.zip" .
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$TAG" "relay-extension-$TAG.zip" --draft --target "$GITHUB_SHA" \
+            --title "Relay $TAG" --generate-notes
+          gh release edit "$TAG" --draft=false

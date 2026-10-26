@@ -1,0 +1,14 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    // Chrome 138 is the minimum; it has ES2024 (Promise.withResolvers).
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    "types": ["vite/client", "chrome"],
+    "resolveJsonModule": true,
+    "jsx": "react-jsx",
+    "paths": {
+      "@/*": ["./src/*"]
+    }
+  },
+  "include": ["src", "manifest.config.ts", "vite.config.ts"]
+}

@@ -1,0 +1,417 @@
+import { BACKGROUND_CONTEXT } from "@earendil-works/chord/context";
+import {
+  createModels,
+  fauxAssistantMessage,
+  fauxProvider,
+  fauxText,
+  fauxToolCall,
+  Type,
+  type Context,
+  type Message,
+} from "@earendil-works/pi-ai";
+import {
+  createRegistry,
+  defineExtension,
+  Harness,
+  MemoryStorage,
+} from "@earendil-works/pi-durable";
+import { createStore } from "jotai";
+import { describe, expect, test } from "vite-plus/test";
+
+import { PluginHost } from "./host.ts";
+import { definePlugin, defineTool, type RelayAPI, type RelayPlugin } from "./plugin.ts";
+import { AgentSession, coreExtension, USER_ENTRY } from "./session.ts";
+import { updateSettingsAtom } from "./settings.ts";
+import { toPiTool } from "./tools.ts";
+
+const context = BACKGROUND_CONTEXT;
+
+/** A session on in-memory storage, wired to a scripted model, with the given plugins loaded. */
+async function setup(plugins: RelayPlugin[] = []) {
+  const faux = fauxProvider({ provider: "faux", models: [{ id: "faux-1" }] });
+  const models = createModels();
+  models.setProvider(faux.provider);
+  const store = createStore();
+  await store.set(updateSettingsAtom, { model: { provider: "faux", id: "faux-1" } });
+  const registry = createRegistry();
+  registry.install(coreExtension);
+
+  const notices: string[] = [];
+  const requests: Context[] = [];
+  const host = new PluginHost({
+    registry,
+    reserved: [lateExtension],
+    notify: (message) => void notices.push(message),
+  });
+  await host.load(plugins, []);
+  const harness = await Harness.open(new MemoryStorage(), { models, registry }, context);
+  const session = new AgentSession({ harness, host, models, store });
+  await session.start();
+
+  /** Script the model's replies and record each request it receives. */
+  const respond = (...replies: Parameters<typeof fauxAssistantMessage>[]) =>
+    faux.setResponses(
+      replies.map((reply) => (request) => {
+        requests.push(structuredClone(request));
+        return fauxAssistantMessage(...reply);
+      }),
+    );
+  /** Send a message and wait until the agent is done with it. */
+  const send = async (...args: Parameters<AgentSession["prompt"]>) => {
+    await session.prompt(...args);
+    await harness.waitForIdle(context);
+  };
+  return { session, host, harness, registry, models, store, notices, requests, respond, send };
+}
+
+const echoTool = defineTool({
+  name: "echo",
+  description: "Returns its input",
+  parameters: Type.Object({ value: Type.String() }),
+  execute: async ({ value }) => {
+    if (value === "fail") throw new Error("echo broke");
+    return value === "object" ? { echoed: true } : `echo:${value}`;
+  },
+});
+
+/** Stands in for code mode: installed after the plugins, so the host must reserve its names. */
+const lateExtension = defineExtension({
+  name: "late",
+  tools: [toPiTool({ ...echoTool, name: "late_tool" })],
+});
+
+function withPlugin(setup: (relay: RelayAPI) => void): RelayPlugin {
+  return definePlugin({ id: "test", name: "Test", setup });
+}
+
+function lastToolResult(messages: readonly Message[]) {
+  return messages.findLast((message) => message.role === "toolResult");
+}
+
+function lastUser(messages: readonly Message[]) {
+  return messages.findLast((message) => message.role === "user")!;
+}
+
+describe("AgentSession", () => {
+  test("runs plugin tools and feeds their results back to the model", async () => {
+    const { session, respond, requests, send } = await setup([
+      withPlugin((relay) => relay.registerTool(echoTool)),
+    ]);
+    respond(
+      [fauxToolCall("echo", { value: "ping" }), { stopReason: "toolUse" }],
+      [fauxToolCall("echo", { value: "object" }), { stopReason: "toolUse" }],
+      [fauxToolCall("echo", { value: "fail" }), { stopReason: "toolUse" }],
+      [fauxText("done")],
+    );
+
+    await send("go");
+
+    expect(session.error).toBeUndefined();
+    expect(lastToolResult(requests[1]!.messages)).toMatchObject({
+      isError: false,
+      content: [{ type: "text", text: "echo:ping" }],
+    });
+    expect(lastToolResult(requests[2]!.messages)).toMatchObject({
+      isError: false,
+      content: [{ type: "text", text: JSON.stringify({ echoed: true }, null, 2) }],
+    });
+    const failed = lastToolResult(requests[3]!.messages);
+    expect(failed).toMatchObject({ isError: true });
+    expect(JSON.stringify(failed!.content)).toContain("echo broke");
+    expect(session.view.entries.at(-1)?.model?.[0]).toMatchObject({
+      role: "assistant",
+      stopReason: "stop",
+    });
+    expect(session.isRunning).toBe(false);
+  });
+
+  test("sends prompt sections and before_agent_start context, and shows only the typed text", async () => {
+    const { session, respond, requests, send } = await setup([
+      withPlugin((relay) => {
+        relay.registerPromptSection("SECTION-EXTRA");
+        relay.on("before_agent_start", () => ({ context: "Active tab: example.com" }));
+      }),
+    ]);
+    respond([fauxText("ok")]);
+
+    await send("hello");
+
+    const prompt = JSON.stringify(requests[0]);
+    expect(prompt.indexOf("You are Relay")).toBeLessThan(prompt.indexOf("SECTION-EXTRA"));
+    const user = lastUser(requests[0]!.messages);
+    expect(user.content).toContain("Active tab: example.com");
+    expect(user.content).toMatch(/\n\nhello$/);
+    expect(session.view.entries.find((entry) => entry.kind === USER_ENTRY)?.data).toEqual({
+      text: "hello",
+    });
+  });
+
+  test("sends attached images when the model accepts them, and refuses them otherwise", async () => {
+    const { session, respond, requests, send, models } = await setup();
+    respond([fauxText("a cat")]);
+    const image = { type: "image" as const, data: "iVBORw0KGgo=", mimeType: "image/png" };
+
+    await send("what is this?", [image]);
+
+    expect(session.error).toBeUndefined();
+    expect(lastUser(requests[0]!.messages).content).toEqual([
+      { type: "text", text: expect.stringMatching(/^<context>[\s\S]*\n\nwhat is this\?$/) },
+      image,
+    ]);
+
+    const textOnly = fauxProvider({
+      provider: "faux",
+      models: [{ id: "faux-1", input: ["text"] }],
+    });
+    models.setProvider(textOnly.provider);
+    textOnly.setResponses([fauxAssistantMessage(fauxText("never"))]);
+    await send("look", [image]);
+    expect(session.error).toContain("does not accept images");
+    expect(textOnly.state.callCount).toBe(0);
+  });
+
+  test("a failing plugin handler is reported and does not stop the run", async () => {
+    const { session, respond, notices, send } = await setup([
+      withPlugin((relay) => {
+        relay.on("before_agent_start", () => {
+          throw new Error("plugin bug");
+        });
+      }),
+    ]);
+    respond([fauxText("still works")]);
+
+    await send("hello");
+
+    expect(notices.join()).toContain("plugin bug");
+    expect(session.view.entries.at(-1)?.model?.[0]).toMatchObject({ stopReason: "stop" });
+  });
+
+  test("tells plugins when a run ends", async () => {
+    let runs = 0;
+    const { respond, send } = await setup([
+      withPlugin((relay) => relay.on("run_end", () => void runs++)),
+    ]);
+    respond([fauxText("ok")]);
+
+    await send("hello");
+    // Events are delivered after their commit; give the stream a moment to drain.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(runs).toBe(1);
+  });
+
+  test("falls back to an available model when the selected one is unknown", async () => {
+    const { session, store, respond, send } = await setup();
+    respond([fauxText("ok")]);
+    await store.set(updateSettingsAtom, { model: { provider: "nope", id: "nope" } });
+    await send("hello");
+    expect(session.model?.id).toBe("faux-1");
+  });
+
+  test("switches model when the provider's credential is not served the selected one", async () => {
+    const { session, models, send } = await setup();
+    const faux = fauxProvider({ provider: "faux", models: [{ id: "faux-1" }, { id: "faux-2" }] });
+    models.setProvider({
+      ...faux.provider,
+      filterModels: (list) => list.filter((model) => model.id !== "faux-1"),
+    });
+    faux.setResponses([fauxAssistantMessage(fauxText("ok"))]);
+
+    await send("hello");
+
+    expect(session.error).toBeUndefined();
+    expect(session.model?.id).toBe("faux-2");
+    expect(faux.state.callCount).toBe(1);
+  });
+
+  test("reset opens a new conversation, which the next start reopens", async () => {
+    const { session, harness, host, models, store, respond, send } = await setup();
+    respond([fauxText("one")]);
+    await send("first");
+    const first = session.conversationId;
+
+    await session.reset();
+    expect(session.conversationId).not.toBe(first);
+    expect(session.view.entries).toHaveLength(0);
+
+    const reopened = new AgentSession({ harness, host, models, store });
+    await reopened.start();
+    expect(reopened.conversationId).toBe(session.conversationId);
+  });
+
+  test("Stop ends a plugin tool that ignores its abort signal", async () => {
+    let started!: () => void;
+    const running = new Promise<void>((resolve) => (started = resolve));
+    const { session, harness, respond } = await setup([
+      withPlugin((relay) =>
+        relay.registerTool(
+          defineTool({
+            name: "hang",
+            description: "Never returns",
+            parameters: Type.Object({}),
+            execute: () => {
+              started();
+              return new Promise(() => {});
+            },
+          }),
+        ),
+      ),
+    ]);
+    respond([fauxToolCall("hang", {}), { stopReason: "toolUse" }], [fauxText("unused")]);
+
+    await session.prompt("go");
+    await running;
+    await session.abort();
+    await harness.waitForIdle(context);
+
+    expect(session.isRunning).toBe(false);
+  });
+
+  test("drops a message whose conversation was replaced while it was being prepared", async () => {
+    let release!: () => void;
+    const preparing = new Promise<void>((resolve) => (release = resolve));
+    const plugin = withPlugin((relay) =>
+      relay.on("before_agent_start", async () => {
+        await preparing;
+        return { context: "slow context" };
+      }),
+    );
+    const { session, harness, respond, requests } = await setup([plugin]);
+    respond([fauxText("never sent")]);
+    const first = session.conversationId;
+
+    const sending = session.prompt("for the first conversation");
+    await session.reset();
+    release();
+    await sending;
+    await harness.waitForIdle(context);
+
+    expect(session.conversationId).not.toBe(first);
+    expect(session.view.entries).toHaveLength(0);
+    expect(requests).toHaveLength(0);
+  });
+});
+
+describe("PluginHost", () => {
+  test("a plugin whose tools or prompt cannot be installed fails alone", async () => {
+    const { host, registry } = await setup();
+    const tool = (name: string) => ({ ...echoTool, name });
+    await host.load(
+      [
+        definePlugin({
+          id: "twice",
+          name: "Twice",
+          setup(relay) {
+            relay.registerTool(tool("same"));
+            relay.registerTool(tool("same"));
+          },
+        }),
+        definePlugin({
+          id: "camelCase",
+          name: "Camel case",
+          setup: (relay) => relay.registerPromptSection("Guidance."),
+        }),
+        definePlugin({
+          id: "twice",
+          name: "Same id",
+          setup: (relay) => relay.registerTool(tool("other")),
+        }),
+        definePlugin({
+          id: "after",
+          name: "After",
+          setup: (relay) => relay.registerTool(tool("after")),
+        }),
+      ],
+      [],
+    );
+    expect(host.plugins.map(({ plugin, error }) => [plugin.id, error])).toEqual([
+      ["twice", "Extension twice has two tools named same"],
+      ["camelCase", expect.stringContaining('Invalid plugin id "camelCase"')],
+      ["twice", 'Another plugin already has the id "twice".'],
+      ["after", undefined],
+    ]);
+    expect(
+      registry
+        .snapshot()
+        .tools()
+        .map((registered) => registered.tool.name),
+    ).toEqual(["after"]);
+  });
+
+  test("a plugin cannot take the name or tools of another extension", async () => {
+    const { host, registry } = await setup();
+    const tool = (name: string) => ({ ...echoTool, name });
+    const plugin = (id: string, toolName: string) =>
+      definePlugin({ id, name: id, setup: (relay) => relay.registerTool(tool(toolName)) });
+    await host.load(
+      [
+        plugin("relay", "core_tool"),
+        plugin("late", "late_plugin_tool"),
+        plugin("first", "shared"),
+        plugin("second", "shared"),
+        plugin("third", "late_tool"),
+      ],
+      [],
+    );
+    expect(host.plugins.map(({ plugin, error }) => [plugin.id, error])).toEqual([
+      ["relay", 'The plugin id "relay" is reserved.'],
+      ["late", 'The plugin id "late" is reserved.'],
+      ["first", undefined],
+      ["second", 'The tool name "shared" is taken by "first".'],
+      ["third", 'The tool name "late_tool" is taken by "late".'],
+    ]);
+    expect(
+      registry
+        .snapshot()
+        .installed()
+        .map((extension) => extension.name),
+    ).toEqual(["relay", "first"]);
+  });
+
+  test("skips disabled plugins and keeps nothing from a plugin whose setup throws", async () => {
+    const { host, registry } = await setup();
+    const tool = (name: string) => ({ ...echoTool, name });
+    await host.load(
+      [
+        definePlugin({ id: "off", name: "Off", setup: (relay) => relay.registerTool(tool("off")) }),
+        definePlugin({
+          id: "broken",
+          name: "Broken",
+          setup(relay) {
+            relay.registerTool(tool("broken"));
+            relay.registerSettingsPage(() => null);
+            throw new Error("bad setup");
+          },
+        }),
+        definePlugin({
+          id: "good",
+          name: "Good",
+          setup(relay) {
+            relay.registerTool(tool("good"));
+            relay.registerSettingsPage(() => null);
+          },
+        }),
+      ],
+      ["off"],
+    );
+
+    expect(
+      registry
+        .snapshot()
+        .tools()
+        .map((registered) => registered.tool.name),
+    ).toEqual(["good"]);
+    expect(
+      host.plugins.map(({ plugin, enabled, error, settings }) => [
+        plugin.id,
+        enabled,
+        error,
+        settings !== undefined,
+      ]),
+    ).toEqual([
+      ["off", false, undefined, false],
+      ["broken", true, "bad setup", false],
+      ["good", true, undefined, true],
+    ]);
+  });
+});
