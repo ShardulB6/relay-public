@@ -1,4 +1,4 @@
-import type { ModelThinkingLevel } from "@earendil-works/pi-ai";
+import type { Api, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
 import type { AuthCheck, AuthEvent, AuthPrompt, AuthType } from "@earendil-works/pi-ai";
 import { useAtomValue, useSetAtom } from "jotai";
 import { ChevronLeftIcon, SettingsIcon } from "lucide-react";
@@ -38,6 +38,7 @@ import {
   SelectContent,
   SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
@@ -268,13 +269,75 @@ function PluginSettingsView({
   );
 }
 
+/** No title model: conversations are named after their first message. */
+const FIRST_MESSAGE = "";
+
+/** The model that names new conversations, out of those the stored credentials are served. */
+function TitleModelField({ app, available }: { app: RelayApp; available: readonly Model<Api>[] }) {
+  const selected = useAtomValue(settingsAtom).titleModel;
+  const updateSettings = useSetAtom(updateSettingsAtom);
+  const providers = new Map<string, Model<Api>[]>();
+  for (const model of available) {
+    providers.set(model.provider, [...(providers.get(model.provider) ?? []), model]);
+  }
+  const key = (model: { provider: string; id: string }) => `${model.provider}/${model.id}`;
+  // A model whose credential was removed is not offered, and not used.
+  const current = selected && available.find((model) => key(model) === key(selected));
+
+  return (
+    <Field>
+      <FieldContent>
+        <FieldLabel htmlFor="title-model">Title model</FieldLabel>
+        <FieldDescription>
+          Names each new conversation from its first message, using that provider's credential. Only
+          models your connected providers serve are listed.
+        </FieldDescription>
+      </FieldContent>
+      <Select
+        value={current ? key(current) : FIRST_MESSAGE}
+        onValueChange={(value) => {
+          // Model ids may contain slashes; the provider id never does.
+          const [provider, ...rest] = (value ?? "").split("/");
+          void updateSettings({
+            titleModel: provider && rest.length > 0 ? { provider, id: rest.join("/") } : undefined,
+          });
+        }}
+      >
+        <SelectTrigger id="title-model" className="w-full min-w-0">
+          <SelectValue className="min-w-0 truncate">
+            {() => current?.name ?? "None (use the first message)"}
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent alignItemWithTrigger={false} className="max-h-80">
+          <SelectGroup>
+            <SelectItem value={FIRST_MESSAGE}>None (use the first message)</SelectItem>
+          </SelectGroup>
+          {[...providers].map(([providerId, list]) => (
+            <SelectGroup key={providerId}>
+              <SelectLabel>{app.models.getProvider(providerId)?.name ?? providerId}</SelectLabel>
+              {list.map((model) => (
+                <SelectItem key={key(model)} value={key(model)}>
+                  {model.name}
+                </SelectItem>
+              ))}
+            </SelectGroup>
+          ))}
+        </SelectContent>
+      </Select>
+    </Field>
+  );
+}
+
 export function SettingsView({
   app,
   auth,
+  available,
   actions,
 }: {
   app: RelayApp;
   auth: ReadonlyMap<string, AuthCheck | undefined>;
+  /** Models the stored credentials are served. */
+  available: readonly Model<Api>[];
   actions: SettingsActions;
 }) {
   const { models, host } = app;
@@ -393,6 +456,11 @@ export function SettingsView({
               </SelectContent>
             </Select>
           </Field>
+        </FieldSet>
+
+        <FieldSet>
+          <FieldLegend>Conversations</FieldLegend>
+          <TitleModelField app={app} available={available} />
         </FieldSet>
 
         <FieldSet>

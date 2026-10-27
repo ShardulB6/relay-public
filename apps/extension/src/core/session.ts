@@ -25,6 +25,7 @@ import { storage } from "@wxt-dev/storage";
 import type { Store } from "jotai";
 
 import { Emitter } from "./events.ts";
+import { fallbackTitle, generateTitle, historyAtom } from "./history.ts";
 import type { PluginHost } from "./host.ts";
 import { settingsAtom, updateSettingsAtom } from "./settings.ts";
 
@@ -107,6 +108,10 @@ export class AgentSession {
   #conversation?: Conversation;
   #view?: AttachedReplicatedState<ConversationView>;
   #events?: AgentEventStream;
+  /** Counts calls to `#show`; when they overlap, only the latest is shown. */
+  #shows = 0;
+  /** Deleted from the history; a message still being stored must not add them back. */
+  #deleted = new Set<ConversationId>();
   #deps: SessionDependencies;
 
   constructor(deps: SessionDependencies) {
@@ -185,6 +190,7 @@ export class AgentSession {
         },
         context,
       );
+      await this.#record(conversation.id, text);
     } catch (error) {
       this.error = error instanceof Error ? error.message : String(error);
     } finally {
@@ -203,9 +209,38 @@ export class AgentSession {
       { ownership: { kind: "ownerless" } },
       context,
     );
-    await conversationItem.setValue(conversation.id);
     this.error = undefined;
     await this.#show(conversation);
+  }
+
+  /** Show a conversation from the history. */
+  async open(id: ConversationId): Promise<void> {
+    if (id === this.conversationId) return;
+    const conversation = await this.#deps.harness.conversation(id, context);
+    if (!conversation) throw new Error("That conversation no longer exists");
+    await this.#open().abort(context);
+    this.error = undefined;
+    await this.#show(conversation);
+  }
+
+  async rename(id: ConversationId, title: string): Promise<void> {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    await this.#deps.store.set(historyAtom, (entries) =>
+      entries.map((entry) => (entry.id === id ? { ...entry, title: trimmed } : entry)),
+    );
+  }
+
+  /**
+   * Remove a conversation from the history, and start a new one if it is the one shown.
+   * pi-durable cannot delete a conversation, so its messages stay in storage.
+   */
+  async delete(id: ConversationId): Promise<void> {
+    this.#deleted.add(id);
+    await this.#deps.store.set(historyAtom, (entries) =>
+      entries.filter((entry) => entry.id !== id),
+    );
+    if (id === this.conversationId) await this.reset();
   }
 
   async setModel(provider: string, id: string): Promise<void> {
@@ -218,19 +253,80 @@ export class AgentSession {
     return this.#conversation;
   }
 
+  /**
+   * Show `conversation` and remember it for the next start. Its view is loaded before anything
+   * switches, so the conversation, its transcript and its events always change together; when
+   * calls overlap (two quick clicks in the history), only the latest one is shown.
+   */
   async #show(conversation: Conversation) {
     const { harness, host } = this.#deps;
-    this.#view?.dispose();
-    await this.#events?.stop();
+    const show = ++this.#shows;
+    const view = await conversation.viewState(context);
+    let events: AgentEventStream;
+    try {
+      events = await watchEvents(harness, conversation.id, context);
+    } catch (error) {
+      view.dispose();
+      throw error;
+    }
+    if (show !== this.#shows) {
+      view.dispose();
+      await events.stop();
+      return;
+    }
 
+    const previous = { view: this.#view, events: this.#events };
     this.#conversation = conversation;
-    this.#view = await conversation.viewState(context);
-    this.#view.subscribe(() => this.onChange.emit());
-    this.#events = await watchEvents(harness, conversation.id, context);
-    this.#events.start(async (events) => {
-      for (const event of events) await host.notify(event);
+    this.#view = view;
+    this.#events = events;
+    // Written in show order, so the last conversation shown is the one stored.
+    const stored = conversationItem.setValue(conversation.id);
+    view.subscribe(() => this.onChange.emit());
+    events.start(async (batch) => {
+      for (const event of batch) await host.notify(event);
     });
     this.onChange.emit();
+
+    previous.view?.dispose();
+    await previous.events?.stop();
+    await stored;
+  }
+
+  /** Move the conversation to the top of the history, adding and naming it on its first message. */
+  async #record(id: ConversationId, text: string) {
+    const { store } = this.#deps;
+    if (this.#deleted.has(id)) return;
+    const isNew = !store.get(historyAtom).some((entry) => entry.id === id);
+    const title = fallbackTitle(text);
+    await store.set(historyAtom, (entries) => {
+      const existing = entries.find((entry) => entry.id === id);
+      const entry = { id, title: existing?.title ?? title, updatedAt: Date.now() };
+      return [entry, ...entries.filter((other) => other.id !== id)];
+    });
+    if (isNew && text.trim()) void this.#name(id, text, title);
+  }
+
+  /** Replace a conversation's placeholder title with one the title model writes. */
+  async #name(id: ConversationId, text: string, placeholder: string) {
+    const { models, store } = this.#deps;
+    const selected = store.get(settingsAtom).titleModel;
+    const model = selected && models.getModel(selected.provider, selected.id);
+    if (!model) return;
+    try {
+      // Only a model the provider's credential is served, as in the model picker.
+      const served = await models.getAvailable(model.provider);
+      if (!served.some((candidate) => candidate.id === model.id)) return;
+      const title = await generateTitle(models, model, text);
+      if (!title) return;
+      // Unless the user renamed it meanwhile.
+      await store.set(historyAtom, (entries) =>
+        entries.map((entry) =>
+          entry.id === id && entry.title === placeholder ? { ...entry, title } : entry,
+        ),
+      );
+    } catch (error) {
+      console.error("[relay] Naming the conversation failed", error);
+    }
   }
 
   /** Store the model and thinking level on the conversation, when they changed. */

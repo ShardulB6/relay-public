@@ -6,6 +6,8 @@ import { storageAtom } from "./storage.ts";
 
 export interface Settings {
   model?: { provider: string; id: string };
+  /** Names new conversations from their first message; without it, the message itself is used. */
+  titleModel?: { provider: string; id: string };
   thinkingLevel: ModelThinkingLevel;
   /** Plugin ids that should not be loaded. Takes effect on reload. */
   disabledPlugins: string[];

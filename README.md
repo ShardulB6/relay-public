@@ -44,9 +44,13 @@ pnpm build        # builds the extension into apps/extension/dist
 1. Open `chrome://extensions`, enable **Developer mode**, choose **Load unpacked** and select
    `apps/extension/dist`.
 2. Click the Relay toolbar button to open the side panel.
-3. Open **Settings** and connect a provider. Then pick a model in the header and start asking.
+3. Open **Settings** and connect a provider. Then pick a model below the message box and start asking.
    With a model that accepts images, paste, drop or attach PNG, JPEG, GIF or WebP files to
    send them along with your message. Large images are downscaled before sending.
+4. The clock button in the header lists past conversations: search, reopen, rename or delete
+   them. Each is named after its first message, or by the **Title model** chosen in settings,
+   which offers only models your connected providers serve. Deleting removes a conversation
+   from the list; pi-durable cannot delete it, so its messages stay in the local database.
 
 | Command      | Does                                                                         |
 | ------------ | ---------------------------------------------------------------------------- |

@@ -22,6 +22,14 @@ export default defineManifest({
     extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'",
   },
   permissions: ["sidePanel", "debugger", "tabs", "storage", "unlimitedStorage", "userScripts"],
+  // Model providers. Granted hosts are exempt from CORS, so a response without CORS headers (an
+  // edge challenge or error page) reaches the provider code with its status instead of failing
+  // as a bare "Connection error".
+  host_permissions: [
+    "https://api.openai.com/*",
+    "https://auth.openai.com/*",
+    "https://openrouter.ai/*",
+  ],
   // Userscripts run only on sites the user grants, one at a time, in settings.
   optional_host_permissions: ["http://*/*", "https://*/*"],
 });

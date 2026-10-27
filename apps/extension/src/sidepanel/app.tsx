@@ -13,6 +13,7 @@ import {
   ArrowUpIcon,
   BrainIcon,
   ImagePlusIcon,
+  RotateCwClockIcon,
   SettingsIcon,
   SquareIcon,
   SquarePenIcon,
@@ -62,6 +63,7 @@ import { cn } from "@/lib/utils";
 import type { RelayApp } from "../core/app.ts";
 import { acceptsImages, preferredModel } from "../core/session.ts";
 import { settingsAtom, updateSettingsAtom } from "../core/settings.ts";
+import { HistoryView } from "./history.tsx";
 import { IMAGE_TYPES, imageFiles, prepareImage } from "./images.ts";
 import { LoginDialog, SettingsView, type LoginDialogState } from "./settings.tsx";
 import { Transcript } from "./transcript.tsx";
@@ -107,53 +109,31 @@ function useAuth(app: RelayApp) {
 
 function Header({
   app,
-  available,
+  openHistory,
   openSettings,
 }: {
   app: RelayApp;
-  available: readonly Model<Api>[];
+  openHistory: () => void;
   openSettings: () => void;
 }) {
-  const selected = useAtomValue(settingsAtom).model;
-  const providers = new Map<string, Model<Api>[]>();
-  for (const model of available) {
-    providers.set(model.provider, [...(providers.get(model.provider) ?? []), model]);
-  }
-  const key = (model: { provider: string; id: string }) => `${model.provider}/${model.id}`;
-  const current = selected && available.find((model) => key(model) === key(selected));
-
   return (
     <header className="flex items-center gap-1 border-b p-2 pl-3">
-      <span className="mr-2 font-heading font-semibold">Relay</span>
-      <Select
-        value={current ? key(current) : null}
-        onValueChange={(value) => {
-          // Model ids may contain slashes; the provider id never does.
-          const [provider, ...rest] = (value ?? "").split("/");
-          if (provider && rest.length > 0) void app.session.setModel(provider, rest.join("/"));
-        }}
-      >
-        <SelectTrigger size="sm" aria-label="Model" className="min-w-0 flex-1">
-          <SelectValue
-            placeholder={available.length > 0 ? "Choose a model" : "No provider connected"}
-          >
-            {/* Options are labelled by model name, not by the provider/id value. */}
-            {current ? () => current.name : undefined}
-          </SelectValue>
-        </SelectTrigger>
-        <SelectContent alignItemWithTrigger={false} className="max-h-80">
-          {[...providers].map(([providerId, list]) => (
-            <SelectGroup key={providerId}>
-              <SelectLabel>{app.models.getProvider(providerId)?.name ?? providerId}</SelectLabel>
-              {list.map((model) => (
-                <SelectItem key={key(model)} value={key(model)}>
-                  {model.name}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          ))}
-        </SelectContent>
-      </Select>
+      <span className="mr-auto font-heading font-semibold">Relay</span>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Conversations"
+              onClick={openHistory}
+            />
+          }
+        >
+          <RotateCwClockIcon />
+        </TooltipTrigger>
+        <TooltipContent side="bottom">Conversations</TooltipContent>
+      </Tooltip>
       <Tooltip>
         <TooltipTrigger
           render={
@@ -185,6 +165,59 @@ function Header({
   );
 }
 
+/** Compact select styling for pickers that sit in the message box's toolbar. */
+const TOOLBAR_SELECT =
+  "h-6! border-transparent bg-transparent px-1.5 text-xs font-normal hover:bg-muted dark:bg-transparent dark:hover:bg-muted/50";
+
+/** The model for the next message, grouped by the provider serving it. */
+function ModelPicker({ app, available }: { app: RelayApp; available: readonly Model<Api>[] }) {
+  const selected = useAtomValue(settingsAtom).model;
+  const providers = new Map<string, Model<Api>[]>();
+  for (const model of available) {
+    providers.set(model.provider, [...(providers.get(model.provider) ?? []), model]);
+  }
+  const key = (model: { provider: string; id: string }) => `${model.provider}/${model.id}`;
+  const current = selected && available.find((model) => key(model) === key(selected));
+
+  return (
+    <Select
+      value={current ? key(current) : null}
+      onValueChange={(value) => {
+        // Model ids may contain slashes; the provider id never does.
+        const [provider, ...rest] = (value ?? "").split("/");
+        if (provider && rest.length > 0) void app.session.setModel(provider, rest.join("/"));
+      }}
+    >
+      <SelectTrigger
+        size="sm"
+        aria-label="Model"
+        title="Model"
+        className={cn("-ml-1 min-w-0", TOOLBAR_SELECT)}
+      >
+        <SelectValue
+          className="min-w-0 truncate"
+          placeholder={available.length > 0 ? "Choose a model" : "No provider connected"}
+        >
+          {/* Options are labelled by model name, not by the provider/id value. */}
+          {current ? () => current.name : undefined}
+        </SelectValue>
+      </SelectTrigger>
+      <SelectContent side="top" align="start" alignItemWithTrigger={false} className="max-h-80">
+        {[...providers].map(([providerId, list]) => (
+          <SelectGroup key={providerId}>
+            <SelectLabel>{app.models.getProvider(providerId)?.name ?? providerId}</SelectLabel>
+            {list.map((model) => (
+              <SelectItem key={key(model)} value={key(model)}>
+                {model.name}
+              </SelectItem>
+            ))}
+          </SelectGroup>
+        ))}
+      </SelectContent>
+    </Select>
+  );
+}
+
 /** Reasoning effort for the next message, limited to what the selected model supports. */
 function ReasoningPicker({ app }: { app: RelayApp }) {
   const { thinkingLevel } = useAtomValue(settingsAtom);
@@ -204,7 +237,7 @@ function ReasoningPicker({ app }: { app: RelayApp }) {
         size="sm"
         aria-label="Reasoning level"
         title="Reasoning level"
-        className="-ml-1 h-6! border-transparent bg-transparent px-1.5 text-xs font-normal hover:bg-muted dark:bg-transparent dark:hover:bg-muted/50"
+        className={cn("shrink-0", TOOLBAR_SELECT)}
       >
         <BrainIcon className="size-3.5!" />
         <SelectValue>{(value: ModelThinkingLevel) => THINKING_LABEL[value]}</SelectValue>
@@ -272,12 +305,14 @@ function Attachments({
 
 function Composer({
   app,
+  available,
   draft,
   setDraft,
   images,
   setImages,
 }: {
   app: RelayApp;
+  available: readonly Model<Api>[];
   draft: string;
   setDraft: (draft: string) => void;
   images: ImageContent[];
@@ -365,6 +400,7 @@ function Composer({
             onPaste={onPaste}
           />
           <InputGroupAddon align="block-end">
+            <ModelPicker app={app} available={available} />
             <ReasoningPicker app={app} />
             {supportsImages ? (
               <>
@@ -396,7 +432,7 @@ function Composer({
                 </Tooltip>
               </>
             ) : null}
-            <div className="ml-auto flex items-center gap-1">
+            <div className="ml-auto flex shrink-0 items-center gap-1">
               {session.isRunning ? (
                 <InputGroupButton
                   variant="outline"
@@ -427,6 +463,7 @@ function Composer({
 function Chat({
   app,
   available,
+  openHistory,
   openSettings,
   draft,
   setDraft,
@@ -435,6 +472,7 @@ function Chat({
 }: {
   app: RelayApp;
   available: readonly Model<Api>[];
+  openHistory: () => void;
   openSettings: () => void;
   draft: string;
   setDraft: (draft: string) => void;
@@ -446,7 +484,7 @@ function Chat({
 
   return (
     <>
-      <Header app={app} available={available} openSettings={openSettings} />
+      <Header app={app} openHistory={openHistory} openSettings={openSettings} />
       {isEmpty ? (
         <Empty>
           <EmptyHeader>
@@ -465,13 +503,20 @@ function Chat({
         // A new conversation gets a new scroller, so its scroll state starts over.
         <Transcript key={session.conversationId} app={app} />
       )}
-      <Composer app={app} draft={draft} setDraft={setDraft} images={images} setImages={setImages} />
+      <Composer
+        app={app}
+        available={available}
+        draft={draft}
+        setDraft={setDraft}
+        images={images}
+        setImages={setImages}
+      />
     </>
   );
 }
 
 export function App({ app }: { app: RelayApp }) {
-  const [view, setView] = useState<"chat" | "settings">("chat");
+  const [view, setView] = useState<"chat" | "history" | "settings">("chat");
   // Kept here so an unsent message survives a visit to settings.
   const [draft, setDraft] = useState("");
   const [images, setImages] = useState<ImageContent[]>([]);
@@ -568,16 +613,20 @@ export function App({ app }: { app: RelayApp }) {
           <SettingsView
             app={app}
             auth={auth}
+            available={available}
             actions={{
               login: (providerId, type) => void login(providerId, type),
               logout: (providerId) => void app.models.logout(providerId),
               close: () => setView("chat"),
             }}
           />
+        ) : view === "history" ? (
+          <HistoryView app={app} close={() => setView("chat")} />
         ) : (
           <Chat
             app={app}
             available={available}
+            openHistory={() => setView("history")}
             openSettings={() => setView("settings")}
             draft={draft}
             setDraft={setDraft}

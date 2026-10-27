@@ -7,6 +7,7 @@ import { createStore, type Store } from "jotai";
 import { StoredCredentials } from "./credentials.ts";
 import { openConversationStorage } from "./durable/open.ts";
 import { Emitter } from "./events.ts";
+import { historyAtom } from "./history.ts";
 import { PluginHost } from "./host.ts";
 import { codemodeExtension } from "./codemode.ts";
 import type { RelayPlugin } from "./plugin.ts";
@@ -51,6 +52,7 @@ export async function createApp(plugins: RelayPlugin[]): Promise<RelayApp> {
   const conversations = await openConversationStorage();
   const store = createStore();
   await store.set(settingsAtom.sync);
+  await store.set(historyAtom.sync);
   let deviceId = await deviceIdItem.getValue();
   if (!deviceId) {
     deviceId = crypto.randomUUID();

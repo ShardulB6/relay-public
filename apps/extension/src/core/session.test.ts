@@ -14,10 +14,12 @@ import {
   defineExtension,
   Harness,
   MemoryStorage,
+  type ConversationId,
 } from "@earendil-works/pi-durable";
 import { createStore } from "jotai";
-import { describe, expect, test } from "vite-plus/test";
+import { describe, expect, test, vi } from "vite-plus/test";
 
+import { historyAtom } from "./history.ts";
 import { PluginHost } from "./host.ts";
 import { definePlugin, defineTool, type RelayAPI, type RelayPlugin } from "./plugin.ts";
 import { AgentSession, coreExtension, USER_ENTRY } from "./session.ts";
@@ -27,7 +29,7 @@ import { toPiTool } from "./tools.ts";
 const context = BACKGROUND_CONTEXT;
 
 /** A session on in-memory storage, wired to a scripted model, with the given plugins loaded. */
-async function setup(plugins: RelayPlugin[] = []) {
+async function setup(plugins: RelayPlugin[] = [], storage = new MemoryStorage()) {
   const faux = fauxProvider({ provider: "faux", models: [{ id: "faux-1" }] });
   const models = createModels();
   models.setProvider(faux.provider);
@@ -44,7 +46,7 @@ async function setup(plugins: RelayPlugin[] = []) {
     notify: (message) => void notices.push(message),
   });
   await host.load(plugins, []);
-  const harness = await Harness.open(new MemoryStorage(), { models, registry }, context);
+  const harness = await Harness.open(storage, { models, registry }, context);
   const session = new AgentSession({ harness, host, models, store });
   await session.start();
 
@@ -413,5 +415,132 @@ describe("PluginHost", () => {
       ["broken", true, "bad setup", false],
       ["good", true, undefined, true],
     ]);
+  });
+
+  describe("history", () => {
+    test("lists conversations by last message, named after the first one", async () => {
+      const { session, store, respond, send } = await setup();
+      respond([fauxText("ok")], [fauxText("ok")], [fauxText("ok")]);
+
+      await send("Plan a trip to Lisbon\nwith details");
+      const first = session.conversationId;
+      await session.reset();
+      await send("Compare laptops");
+      expect(store.get(historyAtom).map((entry) => entry.title)).toEqual([
+        "Compare laptops",
+        "Plan a trip to Lisbon",
+      ]);
+
+      await session.open(first);
+      await send("And hotels?");
+      expect(store.get(historyAtom).map((entry) => entry.title)).toEqual([
+        "Plan a trip to Lisbon",
+        "Compare laptops",
+      ]);
+      expect(session.conversationId).toBe(first);
+    });
+
+    test("names a new conversation with the title model", async () => {
+      const { store, models, respond, send } = await setup();
+      const titler = fauxProvider({ provider: "titler", models: [{ id: "small" }] });
+      models.setProvider(titler.provider);
+      titler.setResponses([fauxAssistantMessage(fauxText('"Lisbon trip plan."'))]);
+      await store.set(updateSettingsAtom, { titleModel: { provider: "titler", id: "small" } });
+      respond([fauxText("ok")]);
+
+      await send("Plan a trip to Lisbon");
+
+      await vi.waitFor(() => expect(store.get(historyAtom)[0]?.title).toBe("Lisbon trip plan"));
+      expect(titler.state.callCount).toBe(1);
+    });
+
+    test("keeps the first message as the title when the title model fails", async () => {
+      const { store, models, respond, send } = await setup();
+      const titler = fauxProvider({ provider: "titler", models: [{ id: "small" }] });
+      models.setProvider(titler.provider);
+      titler.setResponses([fauxAssistantMessage([], { stopReason: "error" })]);
+      await store.set(updateSettingsAtom, { titleModel: { provider: "titler", id: "small" } });
+      respond([fauxText("ok")]);
+
+      await send("Plan a trip to Lisbon");
+
+      await vi.waitFor(() => expect(titler.state.callCount).toBe(1));
+      expect(store.get(historyAtom)[0]?.title).toBe("Plan a trip to Lisbon");
+    });
+
+    test("renames and deletes conversations; deleting the open one starts another", async () => {
+      const { session, store, respond, send } = await setup();
+      respond([fauxText("ok")], [fauxText("ok")]);
+      await send("First");
+      const first = session.conversationId;
+      await session.reset();
+      await send("Second");
+      const second = session.conversationId;
+
+      await session.rename(first, "  Renamed  ");
+      await session.rename(first, "   ");
+      expect(store.get(historyAtom).find((entry) => entry.id === first)?.title).toBe("Renamed");
+
+      await session.delete(first);
+      expect(store.get(historyAtom).map((entry) => entry.id)).toEqual([second]);
+      expect(session.conversationId).toBe(second);
+
+      await session.delete(second);
+      expect(store.get(historyAtom)).toEqual([]);
+      expect(session.conversationId).not.toBe(second);
+    });
+
+    test("overlapping opens show the last one, never one's transcript under another's id", async () => {
+      const { session, respond, send } = await setup();
+      respond([fauxText("ok")], [fauxText("ok")], [fauxText("ok")]);
+      const texts = new Map<ConversationId, string>();
+      for (const text of ["A", "B", "C"]) {
+        await session.reset();
+        await send(text);
+        texts.set(session.conversationId, text);
+      }
+      const [a, b] = [...texts.keys()];
+
+      const shownText = () =>
+        (session.view.entries.find((entry) => entry.kind === USER_ENTRY)?.data as { text: string })
+          ?.text;
+      const mismatches: (string | undefined)[] = [];
+      const off = session.onChange.on(() => {
+        if (shownText() !== texts.get(session.conversationId)) mismatches.push(shownText());
+      });
+      await Promise.all([session.open(a!), session.open(b!)]);
+      off();
+
+      expect(mismatches).toEqual([]);
+      expect(session.conversationId).toBe(b);
+      expect(shownText()).toBe("B");
+    });
+
+    test("deleting a conversation while its message is being stored keeps it deleted", async () => {
+      const storage = new MemoryStorage();
+      const { session, store, respond, send } = await setup([], storage);
+      respond([fauxText("ok")], [fauxText("ok")]);
+      await send("First");
+      const id = session.conversationId;
+
+      // Hold the next commit until the conversation has been deleted.
+      const commit = storage.commit.bind(storage);
+      const held = Promise.withResolvers<void>();
+      let holding = true;
+      storage.commit = async (...args) => {
+        if (holding) {
+          holding = false;
+          await held.promise;
+        }
+        return commit(...args);
+      };
+      const pending = session.prompt("Second");
+      await vi.waitFor(() => expect(holding).toBe(false));
+      const deleted = session.delete(id);
+      held.resolve();
+      await Promise.all([pending, deleted]);
+
+      expect(store.get(historyAtom).some((entry) => entry.id === id)).toBe(false);
+    });
   });
 });
