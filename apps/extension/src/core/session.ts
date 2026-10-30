@@ -16,10 +16,12 @@ import {
   type Conversation,
   type ConversationId,
   type ConversationView,
+  type EntryId,
   type Extension,
   type Harness,
   type InboxState,
   type LiveState,
+  type SubmissionId,
 } from "@earendil-works/pi-durable";
 import { storage } from "@wxt-dev/storage";
 import type { Store } from "jotai";
@@ -91,6 +93,18 @@ export interface UserEntryData {
   text: string;
   /** The documents attached, by name; the model gets their text. */
   documents: { name: string; pages: number }[];
+}
+
+/** The entry kind noting how long a run worked; shown only in the transcript. */
+export const WORKED_ENTRY = "relay.worked";
+
+export interface WorkedEntryData {
+  /** From the first message the run answered to the run's end. */
+  durationMs: number;
+  /** The first message the run answered; the note heads the run's work after it. */
+  input: EntryId;
+  /** The run's final answer; absent when the run ended without one. */
+  answer?: EntryId;
 }
 
 /**
@@ -180,6 +194,8 @@ export class AgentSession {
   #shows = 0;
   /** Deleted from the history; a message still being stored must not add them back. */
   #deleted = new Set<ConversationId>();
+  /** The running run's first input, and the entry it was placed as once that is looked up. */
+  #run?: { input: SubmissionId; entry?: EntryId };
   #deps: SessionDependencies;
 
   constructor(deps: SessionDependencies) {
@@ -216,6 +232,11 @@ export class AgentSession {
 
   get isRunning(): boolean {
     return this.live.run !== undefined;
+  }
+
+  /** The message the running run started with; unset until it is looked up. */
+  get runStart(): EntryId | undefined {
+    return this.#run?.entry;
   }
 
   /** The selected model, if its provider is registered. */
@@ -375,17 +396,84 @@ export class AgentSession {
     this.#conversation = conversation;
     this.#view = view;
     this.#events = events;
+    this.#run = undefined;
+    this.#trackRun();
     // Written in show order, so the last conversation shown is the one stored.
     const stored = conversationItem.setValue(conversation.id);
-    view.subscribe(() => this.onChange.emit());
+    view.subscribe(() => {
+      this.#trackRun();
+      this.onChange.emit();
+    });
     events.start(async (batch) => {
-      for (const event of batch) await host.notify(event);
+      for (const event of batch) {
+        if (event.type === "run_end") await this.#recordWorked(conversation, event.inputs);
+        await host.notify(event);
+      }
     });
     this.onChange.emit();
 
     previous.view?.dispose();
     await previous.events?.stop();
     await stored;
+  }
+
+  /** Look up the message a newly started run began with, for the transcript to head it. */
+  #trackRun() {
+    const input = this.live.run?.inputs[0];
+    if (input === this.#run?.input) return;
+    const run =
+      input === undefined ? undefined : { input, entry: undefined as EntryId | undefined };
+    this.#run = run;
+    if (!run) return;
+    void (async () => {
+      const record = await (
+        await this.#deps.harness.submission(run.input, context)
+      )?.status(context);
+      if (this.#run !== run || record?.entry === undefined) return;
+      run.entry = record.entry;
+      this.onChange.emit();
+    })().catch((error) => console.error("[relay] Looking up the running message failed", error));
+  }
+
+  /** Note how long a run worked, from its first message to now. */
+  async #recordWorked(conversation: Conversation, inputs: readonly SubmissionId[]) {
+    const end = Date.now();
+    try {
+      const records = await Promise.all(
+        inputs.map(async (id) =>
+          (await this.#deps.harness.submission(id, context))?.status(context),
+        ),
+      );
+      const first = records[0]?.entry;
+      if (first === undefined) return;
+      const page = await conversation.entries(
+        { minEntryId: first, maxEntryId: first },
+        1,
+        undefined,
+        context,
+      );
+      const start = page.items[0]?.model?.[0]?.timestamp;
+      if (start === undefined) return;
+      const answer = records.find((record) => record?.answer !== undefined)?.answer;
+      await conversation.submit(
+        {
+          type: "write",
+          // One note per run, however many panels see it end.
+          requestId: `worked:${inputs[0]}`,
+          entry: {
+            kind: WORKED_ENTRY,
+            data: {
+              durationMs: Math.max(0, end - start),
+              input: first,
+              ...(answer === undefined ? {} : { answer }),
+            } satisfies WorkedEntryData,
+          },
+        },
+        context,
+      );
+    } catch (error) {
+      console.error("[relay] Recording how long the run worked failed", error);
+    }
   }
 
   /** Move the conversation to the top of the history, adding and naming it on its first message. */

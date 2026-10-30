@@ -30,6 +30,7 @@ import {
   documentBudget,
   DOCUMENTS_TOO_LONG,
   USER_ENTRY,
+  WORKED_ENTRY,
 } from "./session.ts";
 import { updateSettingsAtom } from "./settings.ts";
 import { chromeStore } from "./storage.ts";
@@ -230,6 +231,60 @@ describe("AgentSession", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(runs).toBe(1);
+  });
+
+  test("notes how long the run worked, from the message to the answer", async () => {
+    const { session, respond, send } = await setup([
+      withPlugin((relay) => relay.registerTool(echoTool)),
+    ]);
+    respond(
+      [fauxToolCall("echo", { value: "ping" }), { stopReason: "toolUse" }],
+      [fauxText("done")],
+    );
+
+    await send("go");
+    await vi.waitFor(() =>
+      expect(session.view.entries.some((entry) => entry.kind === WORKED_ENTRY)).toBe(true),
+    );
+
+    const answer = session.view.entries.findLast(
+      (entry) => entry.model?.[0]?.role === "assistant",
+    )!;
+    const notes = session.view.entries.filter((entry) => entry.kind === WORKED_ENTRY);
+    expect(notes).toHaveLength(1);
+    const input = session.view.entries.find((entry) => entry.kind === USER_ENTRY)!;
+    expect(notes[0]!.data).toEqual({
+      durationMs: expect.any(Number),
+      input: input.id,
+      answer: answer.id,
+    });
+    expect(notes[0]!.model).toBeUndefined();
+  });
+
+  test("knows which message the running run started with", async () => {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const waitTool = defineTool({
+      name: "wait",
+      description: "Waits",
+      parameters: Type.Object({}),
+      execute: async () => {
+        await held;
+        return "waited";
+      },
+    });
+    const { session, harness, respond } = await setup([
+      withPlugin((relay) => relay.registerTool(waitTool)),
+    ]);
+    respond([fauxToolCall("wait", {}), { stopReason: "toolUse" }], [fauxText("done")]);
+
+    await session.prompt("go");
+    const input = session.view.entries.find((entry) => entry.kind === USER_ENTRY)!;
+    await vi.waitFor(() => expect(session.runStart).toBe(input.id));
+
+    release();
+    await harness.waitForIdle(context);
+    await vi.waitFor(() => expect(session.runStart).toBeUndefined());
   });
 
   test("falls back to an available model when the selected one is unknown", async () => {

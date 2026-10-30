@@ -15,7 +15,7 @@ import {
   MessageCircleQuestionIcon,
   RotateCwIcon,
 } from "lucide-react";
-import { Component, useState, type ReactNode } from "react";
+import { Component, useEffect, useState, type ReactNode } from "react";
 
 import { ToolOutput } from "@/components/tool-output";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -35,8 +35,14 @@ import { Spinner } from "@/components/ui/spinner";
 
 import type { RelayApp } from "../core/app.ts";
 import { ASK_USER_TOOL, type Question } from "../core/questions.ts";
-import { USER_ENTRY, type UserEntryData } from "../core/session.ts";
+import {
+  USER_ENTRY,
+  WORKED_ENTRY,
+  type UserEntryData,
+  type WorkedEntryData,
+} from "../core/session.ts";
 import { CodemodeCall } from "./codemode.tsx";
+import { formatDuration } from "./duration.ts";
 import { Markdown } from "./markdown.tsx";
 import { AskUserCall } from "./questions.tsx";
 
@@ -159,22 +165,44 @@ function Thinking({ text, streaming }: { text: string; streaming: boolean }) {
   );
 }
 
+/** Whether an assistant message thought or called tools. */
+function hasWork(message: AssistantMessage): boolean {
+  return message.content.some(
+    (block) =>
+      block.type === "toolCall" || (block.type === "thinking" && block.thinking.trim() !== ""),
+  );
+}
+
+/** Whether an assistant message has text to show, or ended badly. */
+function hasText(message: AssistantMessage): boolean {
+  if (message.stopReason === "error" || message.stopReason === "aborted") return true;
+  return message.content.some((block) => block.type === "text" && block.text.trim() !== "");
+}
+
+/** Which of an assistant message to show: all of it, its work (thinking, tools), or its text. */
+type AssistantPart = "all" | "work" | "text";
+
 function AssistantView({
   app,
   message,
   results,
   streaming,
+  part = "all",
 }: {
   app: RelayApp;
   message: AssistantMessage;
   results: Map<string, ToolResultMessage>;
   streaming: boolean;
+  part?: AssistantPart;
 }) {
+  const showsWork = part !== "text";
+  const showsText = part !== "work";
   return (
     <Message>
       <MessageContent>
         {message.content.map((block, index) => {
           if (block.type === "text") {
+            if (!showsText) return null;
             return block.text.trim() ? (
               <Bubble key={index} variant="ghost">
                 <BubbleContent>
@@ -183,6 +211,7 @@ function AssistantView({
               </Bubble>
             ) : null;
           }
+          if (!showsWork) return null;
           if (block.type === "thinking") {
             return block.thinking.trim() ? (
               <Thinking key={index} text={block.thinking} streaming={streaming} />
@@ -192,14 +221,14 @@ function AssistantView({
             <ToolCallView key={block.id} app={app} call={block} result={results.get(block.id)} />
           );
         })}
-        {message.stopReason === "error" ? (
+        {showsText && message.stopReason === "error" ? (
           <Alert variant="destructive">
             <AlertDescription className="wrap-anywhere">
               {message.errorMessage ?? "The request failed."}
             </AlertDescription>
           </Alert>
         ) : null}
-        {message.stopReason === "aborted" ? (
+        {showsText && message.stopReason === "aborted" ? (
           <Marker>
             <MarkerIcon>
               <CircleSlashIcon />
@@ -295,32 +324,147 @@ function Notice({ icon, children }: { icon?: ReactNode; children: ReactNode }) {
   );
 }
 
+/** How long a finished run worked, heading it; opens below its divider to its thinking and tools. */
+function Worked({ durationMs, children }: { durationMs: number; children: ReactNode[] }) {
+  const label = <MarkerContent>Worked for {formatDuration(durationMs)}</MarkerContent>;
+  if (children.length === 0) return <Marker variant="border">{label}</Marker>;
+  return (
+    <Collapsible>
+      <CollapsibleTrigger
+        render={
+          <Marker
+            variant="border"
+            render={<button type="button" />}
+            className="group/worked cursor-pointer"
+          />
+        }
+      >
+        {label}
+        <ChevronRightIcon className="size-3.5! transition-transform group-data-panel-open/worked:rotate-90" />
+      </CollapsibleTrigger>
+      <CollapsibleContent className="mt-3 flex flex-col gap-4">{children}</CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+/** Time since `since`, ticking every second. */
+function Elapsed({ since }: { since: number }) {
+  const [now, setNow] = useState(Date.now);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  return <>{formatDuration(Math.max(0, now - since))}</>;
+}
+
 /** The conversation, with each tool result shown inside the call that produced it. */
 export function Transcript({ app }: { app: RelayApp }) {
   const { session } = app;
   const { entries } = session.view;
   const { generation, compactions, compactionFailure } = session.live;
   const results = new Map<string, ToolResultMessage>();
+  /** Each finished run's note, by the first message it answered. */
+  const worked = new Map<number, { data: WorkedEntryData; id: number }>();
   for (const entry of entries) {
     const message = entry.model?.[0];
     if (message?.role === "toolResult") results.set(message.toolCallId, message);
+    if (entry.kind === WORKED_ENTRY) {
+      const data = entry.data as unknown as WorkedEntryData;
+      worked.set(data.input, { data, id: entry.id });
+    }
   }
   const streaming = generation?.message as AssistantMessage | undefined;
+  const runStart = session.isRunning ? session.runStart : undefined;
+  const running = entries.find((entry) => entry.id === runStart);
+  const working = (
+    <Marker role="status" variant="border">
+      {/* A streaming answer or running tool shows its own progress. */}
+      {!streaming && !session.live.tools ? (
+        <MarkerIcon>
+          <Spinner />
+        </MarkerIcon>
+      ) : null}
+      <MarkerContent className="shimmer">
+        Working…
+        {running?.model?.[0] === undefined ? null : (
+          // Not announced: it changes every second.
+          <span aria-hidden="true">
+            {" "}
+            <Elapsed since={running.model[0].timestamp} />
+          </span>
+        )}
+      </MarkerContent>
+    </Marker>
+  );
+
+  /** What to show of an entry, if anything. */
+  const view = (entry: EntryRecord, part: AssistantPart = "all"): ReactNode => {
+    const message = entry.model?.[0];
+    if (entry.kind === "pi.compaction") return <Notice>Earlier messages were summarized</Notice>;
+    if (message?.role === "user" && entry.kind !== "pi.reset") return userView(entry, message);
+    if (message?.role === "assistant") {
+      return (
+        <AssistantView
+          app={app}
+          message={message}
+          results={results}
+          streaming={false}
+          part={part}
+        />
+      );
+    }
+    // Tool results render inside their call; system, reset and worked entries are for the model
+    // or are shown with the run they belong to.
+    return undefined;
+  };
+
+  /** Whether a run starts with entry `id`: a finished one with a note, or the running one. */
+  const startsRun = (id: number) => worked.has(id) || id === runStart;
 
   const rows: { key: string; anchor?: boolean; node: ReactNode }[] = [];
-  for (const entry of entries) {
-    const message = entry.model?.[0];
-    if (entry.kind === "pi.compaction") {
-      rows.push({ key: String(entry.id), node: <Notice>Earlier messages were summarized</Notice> });
-    } else if (message?.role === "user" && entry.kind !== "pi.reset") {
-      rows.push({ key: String(entry.id), anchor: true, node: userView(entry, message) });
-    } else if (message?.role === "assistant") {
-      rows.push({
-        key: String(entry.id),
-        node: <AssistantView app={app} message={message} results={results} streaming={false} />,
-      });
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i]!;
+    const node = view(entry);
+    if (node === undefined) continue;
+    const isUser = entry.model?.[0]?.role === "user";
+    rows.push({ key: String(entry.id), anchor: isUser, node });
+    if (entry === running) rows.push({ key: "working", node: working });
+    const run = isUser ? worked.get(entry.id) : undefined;
+    if (!run) continue;
+
+    // A finished run: its note heads it, with its thinking and tools folded under the note, and the
+    // rest follows. A run that ended without an answer (stopped, or failed) ends at its note.
+    // The run ends at its answer, or at its note; a note can land after the next run started,
+    // so the run also ends where another begins.
+    const end = run.data.answer ?? run.id;
+    let last = i;
+    while (
+      last + 1 < entries.length &&
+      entries[last + 1]!.id <= end &&
+      !startsRun(entries[last + 1]!.id)
+    ) {
+      last++;
     }
-    // Tool results render inside their call; system and reset entries are for the model.
+    const span = entries.slice(i + 1, last + 1);
+    const work: ReactNode[] = [];
+    for (const candidate of span) {
+      const message = candidate.model?.[0];
+      if (message?.role === "assistant" && hasWork(message)) {
+        work.push(<div key={candidate.id}>{view(candidate, "work")}</div>);
+      }
+    }
+    rows.push({
+      key: `worked-${run.id}`,
+      node: <Worked durationMs={run.data.durationMs}>{work}</Worked>,
+    });
+    for (const candidate of span) {
+      const message = candidate.model?.[0];
+      if (message?.role === "assistant" && !hasText(message)) continue;
+      const shown = view(candidate, "text");
+      if (shown === undefined) continue;
+      rows.push({ key: String(candidate.id), anchor: message?.role === "user", node: shown });
+    }
+    i = last;
   }
   for (const item of session.inbox) {
     if (item.mode === "write") continue;
@@ -364,15 +508,9 @@ export function Transcript({ app }: { app: RelayApp }) {
                 <Notice icon={<Spinner />}>Summarizing earlier messages…</Notice>
               </MessageScrollerItem>
             ) : null}
-            {session.isRunning && !streaming && !session.live.tools ? (
-              <MessageScrollerItem key="working">
-                <Marker role="status">
-                  <MarkerIcon>
-                    <Spinner />
-                  </MarkerIcon>
-                  <MarkerContent className="shimmer">Working…</MarkerContent>
-                </Marker>
-              </MessageScrollerItem>
+            {session.isRunning && running === undefined ? (
+              // Before the run's first message shows, there is nothing to head.
+              <MessageScrollerItem key="working">{working}</MessageScrollerItem>
             ) : null}
             {compactionFailure ? (
               <MessageScrollerItem key="compaction-failure">
