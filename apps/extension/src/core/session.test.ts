@@ -282,9 +282,17 @@ describe("AgentSession", () => {
     const input = session.view.entries.find((entry) => entry.kind === USER_ENTRY)!;
     await vi.waitFor(() => expect(session.runStart).toBe(input.id));
 
+    // Kept after the run ends until its note lands, so the transcript can keep it folded.
+    const cleared: boolean[] = [];
+    session.onChange.on(() => {
+      if (session.runStart === undefined) {
+        cleared.push(session.view.entries.some((entry) => entry.kind === WORKED_ENTRY));
+      }
+    });
     release();
     await harness.waitForIdle(context);
     await vi.waitFor(() => expect(session.runStart).toBeUndefined());
+    expect(cleared).not.toContain(false);
   });
 
   test("falls back to an available model when the selected one is unknown", async () => {

@@ -95,6 +95,9 @@ export interface UserEntryData {
   documents: { name: string; pages: number }[];
 }
 
+/** How long a finished run keeps its place in the transcript while its note is written. */
+const NOTE_WAIT_MS = 5000;
+
 /** The entry kind noting how long a run worked; shown only in the transcript. */
 export const WORKED_ENTRY = "relay.worked";
 
@@ -195,7 +198,7 @@ export class AgentSession {
   /** Deleted from the history; a message still being stored must not add them back. */
   #deleted = new Set<ConversationId>();
   /** The running run's first input, and the entry it was placed as once that is looked up. */
-  #run?: { input: SubmissionId; entry?: EntryId };
+  #run?: { input: SubmissionId; entry?: EntryId; ended?: boolean };
   #deps: SessionDependencies;
 
   constructor(deps: SessionDependencies) {
@@ -234,7 +237,11 @@ export class AgentSession {
     return this.live.run !== undefined;
   }
 
-  /** The message the running run started with; unset until it is looked up. */
+  /**
+   * The message the current run started with; unset until it is looked up. Kept after the run ends
+   * until its note is in the transcript, for a few seconds at most, so the transcript can keep
+   * showing it as one run.
+   */
   get runStart(): EntryId | undefined {
     return this.#run?.entry;
   }
@@ -420,6 +427,21 @@ export class AgentSession {
   /** Look up the message a newly started run began with, for the transcript to head it. */
   #trackRun() {
     const input = this.live.run?.inputs[0];
+    if (input === undefined && this.#run) {
+      const run = this.#run;
+      if (run.entry === undefined || this.#hasNote(run.entry)) {
+        this.#run = undefined;
+      } else if (!run.ended) {
+        // A note can fail or never be written (its run_end missed), so don't wait on it forever.
+        run.ended = true;
+        setTimeout(() => {
+          if (this.#run !== run) return;
+          this.#run = undefined;
+          this.onChange.emit();
+        }, NOTE_WAIT_MS);
+      }
+      return;
+    }
     if (input === this.#run?.input) return;
     const run =
       input === undefined ? undefined : { input, entry: undefined as EntryId | undefined };
@@ -433,6 +455,14 @@ export class AgentSession {
       run.entry = record.entry;
       this.onChange.emit();
     })().catch((error) => console.error("[relay] Looking up the running message failed", error));
+  }
+
+  /** Whether the transcript has the note of the run that started with entry `input`. */
+  #hasNote(input: EntryId): boolean {
+    return this.view.entries.some(
+      (entry) =>
+        entry.kind === WORKED_ENTRY && (entry.data as unknown as WorkedEntryData).input === input,
+    );
   }
 
   /** Note how long a run worked, from its first message to now. */

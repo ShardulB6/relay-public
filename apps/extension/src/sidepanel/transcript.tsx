@@ -179,6 +179,15 @@ function hasText(message: AssistantMessage): boolean {
   return message.content.some((block) => block.type === "text" && block.text.trim() !== "");
 }
 
+/** Whether an assistant message is a run's answer: it has text, or ended badly, and calls no tools. */
+function isAnswer(message: AssistantMessage | undefined): boolean {
+  return (
+    message !== undefined &&
+    hasText(message) &&
+    !message.content.some((block) => block.type === "toolCall")
+  );
+}
+
 /** Which of an assistant message to show: all of it, its work (thinking, tools), or its text. */
 type AssistantPart = "all" | "work" | "text";
 
@@ -324,15 +333,30 @@ function Notice({ icon, children }: { icon?: ReactNode; children: ReactNode }) {
   );
 }
 
-/** How long a finished run worked, heading it; opens below its divider to its thinking and tools. */
-function Worked({ durationMs, children }: { durationMs: number; children: ReactNode[] }) {
-  const label = <MarkerContent>Worked for {formatDuration(durationMs)}</MarkerContent>;
-  if (children.length === 0) return <Marker variant="border">{label}</Marker>;
+/** Heads a run, how long it worked or that it is working; opens to its thinking and tools. */
+function Worked({
+  label,
+  running = false,
+  children,
+}: {
+  label: ReactNode;
+  running?: boolean;
+  children: ReactNode[];
+}) {
+  const role = running ? "status" : undefined;
+  if (children.length === 0) {
+    return (
+      <Marker role={role} variant="border">
+        {label}
+      </Marker>
+    );
+  }
   return (
     <Collapsible>
       <CollapsibleTrigger
         render={
           <Marker
+            role={role}
             variant="border"
             render={<button type="button" />}
             className="group/worked cursor-pointer"
@@ -374,10 +398,11 @@ export function Transcript({ app }: { app: RelayApp }) {
     }
   }
   const streaming = generation?.message as AssistantMessage | undefined;
-  const runStart = session.isRunning ? session.runStart : undefined;
+  // Kept until the run's note lands, so the run stays folded between its end and its note.
+  const runStart = session.runStart;
   const running = entries.find((entry) => entry.id === runStart);
   const working = (
-    <Marker role="status" variant="border">
+    <>
       {/* A streaming answer or running tool shows its own progress. */}
       {!streaming && !session.live.tools ? (
         <MarkerIcon>
@@ -394,8 +419,10 @@ export function Transcript({ app }: { app: RelayApp }) {
           </span>
         )}
       </MarkerContent>
-    </Marker>
+    </>
   );
+  /** Which of the streaming message the bottom of the transcript shows; its work may be folded. */
+  let streamingPart: AssistantPart = "all";
 
   /** What to show of an entry, if anything. */
   const view = (entry: EntryRecord, part: AssistantPart = "all"): ReactNode => {
@@ -421,23 +448,9 @@ export function Transcript({ app }: { app: RelayApp }) {
   /** Whether a run starts with entry `id`: a finished one with a note, or the running one. */
   const startsRun = (id: number) => worked.has(id) || id === runStart;
 
-  const rows: { key: string; anchor?: boolean; node: ReactNode }[] = [];
-  for (let i = 0; i < entries.length; i++) {
-    const entry = entries[i]!;
-    const node = view(entry);
-    if (node === undefined) continue;
-    const isUser = entry.model?.[0]?.role === "user";
-    rows.push({ key: String(entry.id), anchor: isUser, node });
-    if (entry === running) rows.push({ key: "working", node: working });
-    const run = isUser ? worked.get(entry.id) : undefined;
-    if (!run) continue;
-
-    // A finished run: its note heads it, with its thinking and tools folded under the note, and the
-    // rest follows. A run that ended without an answer (stopped, or failed) ends at its note.
-    // The run ends at its answer, or at its note; a note can land after the next run started,
-    // so the run also ends where another begins.
-    const end = run.data.answer ?? run.id;
-    let last = i;
+  /** The entries of the run starting at `entries[start]`, up to entry id `end`. */
+  const runSpan = (start: number, end: number) => {
+    let last = start;
     while (
       last + 1 < entries.length &&
       entries[last + 1]!.id <= end &&
@@ -445,7 +458,77 @@ export function Transcript({ app }: { app: RelayApp }) {
     ) {
       last++;
     }
-    const span = entries.slice(i + 1, last + 1);
+    return entries.slice(start + 1, last + 1);
+  };
+
+  const rows: { key: string; anchor?: boolean; node: ReactNode }[] = [];
+  for (let i = 0; i < entries.length; i++) {
+    const entry = entries[i]!;
+    const node = view(entry);
+    if (node === undefined) continue;
+    const isUser = entry.model?.[0]?.role === "user";
+    rows.push({ key: String(entry.id), anchor: isUser, node });
+    const run = isUser ? worked.get(entry.id) : undefined;
+    // Both headers of a run share a key, so one opened while the run answers stays open after.
+    const key = `worked-${entry.id}`;
+    let span: EntryRecord[];
+    let header: (work: ReactNode[]) => ReactNode;
+    if (run) {
+      // A finished run: its note heads it, with its thinking and tools folded under the note, and
+      // the rest follows. A run that ended without an answer (stopped, or failed) ends at its
+      // note. The run ends at its answer, or at its note; a note can land after the next run
+      // started, so the run also ends where another begins.
+      span = runSpan(i, run.data.answer ?? run.id);
+      header = (work) => (
+        <Worked
+          label={<MarkerContent>Worked for {formatDuration(run.data.durationMs)}</MarkerContent>}
+        >
+          {work}
+        </Worked>
+      );
+    } else if (entry === running) {
+      span = runSpan(i, Infinity);
+      const latest =
+        streaming ??
+        span.findLast((candidate) => candidate.model?.[0]?.role === "assistant")?.model?.[0];
+      // Until it answers, the running run shows its thinking and tools as they happen.
+      if (!isAnswer(latest as AssistantMessage | undefined)) {
+        rows.push({
+          key,
+          node: (
+            <Worked label={working} running>
+              {[]}
+            </Worked>
+          ),
+        });
+        continue;
+      }
+      // Once it answers, its work folds away as it will when the run ends.
+      header = (work) => {
+        if (streaming && hasWork(streaming)) {
+          work.push(
+            <div key="streaming">
+              <AssistantView
+                app={app}
+                message={streaming}
+                results={results}
+                streaming
+                part="work"
+              />
+            </div>,
+          );
+        }
+        return (
+          <Worked label={working} running>
+            {work}
+          </Worked>
+        );
+      };
+      streamingPart = "text";
+    } else {
+      continue;
+    }
+
     const work: ReactNode[] = [];
     for (const candidate of span) {
       const message = candidate.model?.[0];
@@ -453,10 +536,7 @@ export function Transcript({ app }: { app: RelayApp }) {
         work.push(<div key={candidate.id}>{view(candidate, "work")}</div>);
       }
     }
-    rows.push({
-      key: `worked-${run.id}`,
-      node: <Worked durationMs={run.data.durationMs}>{work}</Worked>,
-    });
+    rows.push({ key, node: header(work) });
     for (const candidate of span) {
       const message = candidate.model?.[0];
       if (message?.role === "assistant" && !hasText(message)) continue;
@@ -464,7 +544,7 @@ export function Transcript({ app }: { app: RelayApp }) {
       if (shown === undefined) continue;
       rows.push({ key: String(candidate.id), anchor: message?.role === "user", node: shown });
     }
-    i = last;
+    i += span.length;
   }
   for (const item of session.inbox) {
     if (item.mode === "write") continue;
@@ -495,7 +575,13 @@ export function Transcript({ app }: { app: RelayApp }) {
             ))}
             {streaming ? (
               <MessageScrollerItem key="streaming" messageId="streaming">
-                <AssistantView app={app} message={streaming} results={results} streaming />
+                <AssistantView
+                  app={app}
+                  message={streaming}
+                  results={results}
+                  streaming
+                  part={streamingPart}
+                />
               </MessageScrollerItem>
             ) : null}
             {generation?.retry ? (
