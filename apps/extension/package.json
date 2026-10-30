@@ -25,6 +25,7 @@
     "jotai": "^3.0.1",
     "lucide-react": "^1.49.0",
     "marked": "^18.0.14",
+    "pdfjs-dist": "^6.4.299",
     "puppeteer-core": "^25.12.0",
     "quickjs-wasi": "3.6.2",
     "react": "^19.3.0",

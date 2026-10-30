@@ -34,7 +34,7 @@ An AI agent in your browser's sidebar, built to be extended. Relay follows the d
 
 ## Getting started
 
-Requirements: Node, pnpm, and a Chromium-family browser (Chrome 138 or newer).
+Requirements: Node, pnpm, and a Chromium-family browser (Chrome 140 or newer).
 
 ```bash
 pnpm install
@@ -46,7 +46,9 @@ pnpm build        # builds the extension into apps/extension/dist
 2. Click the Relay toolbar button to open the side panel.
 3. Open **Settings** and connect a provider. Then pick a model below the message box and start asking.
    With a model that accepts images, paste, drop or attach PNG, JPEG, GIF or WebP files to
-   send them along with your message. Large images are downscaled before sending.
+   send them along with your message. Large images are downscaled before sending. PDFs can be
+   attached with any model: their text is read in the browser and sent with the message, so
+   scanned pages, images and layout are not seen.
 4. The clock button in the header lists past conversations: search, reopen, rename or delete
    them. Each is named after its first message, or by the **Title model** chosen in settings,
    which offers only models your connected providers serve. Deleting removes a conversation

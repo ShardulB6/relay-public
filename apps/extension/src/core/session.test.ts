@@ -22,7 +22,14 @@ import { describe, expect, test, vi } from "vite-plus/test";
 import { historyAtom } from "./history.ts";
 import { PluginHost } from "./host.ts";
 import { definePlugin, defineTool, type RelayAPI, type RelayPlugin } from "./plugin.ts";
-import { AgentSession, coreExtension, USER_ENTRY } from "./session.ts";
+import { Questions, type Question } from "./questions.ts";
+import {
+  AgentSession,
+  coreExtension,
+  documentBudget,
+  DOCUMENTS_TOO_LONG,
+  USER_ENTRY,
+} from "./session.ts";
 import { updateSettingsAtom } from "./settings.ts";
 import { toPiTool } from "./tools.ts";
 
@@ -36,7 +43,8 @@ async function setup(plugins: RelayPlugin[] = [], storage = new MemoryStorage())
   const store = createStore();
   await store.set(updateSettingsAtom, { model: { provider: "faux", id: "faux-1" } });
   const registry = createRegistry();
-  registry.install(coreExtension);
+  const questions = new Questions();
+  registry.install(coreExtension(questions));
 
   const notices: string[] = [];
   const requests: Context[] = [];
@@ -47,7 +55,7 @@ async function setup(plugins: RelayPlugin[] = [], storage = new MemoryStorage())
   });
   await host.load(plugins, []);
   const harness = await Harness.open(storage, { models, registry }, context);
-  const session = new AgentSession({ harness, host, models, store });
+  const session = new AgentSession({ harness, host, models, questions, store });
   await session.start();
 
   /** Script the model's replies and record each request it receives. */
@@ -63,7 +71,19 @@ async function setup(plugins: RelayPlugin[] = [], storage = new MemoryStorage())
     await session.prompt(...args);
     await harness.waitForIdle(context);
   };
-  return { session, host, harness, registry, models, store, notices, requests, respond, send };
+  return {
+    session,
+    host,
+    harness,
+    registry,
+    models,
+    questions,
+    store,
+    notices,
+    requests,
+    respond,
+    send,
+  };
 }
 
 const echoTool = defineTool({
@@ -145,6 +165,7 @@ describe("AgentSession", () => {
     expect(user.content).toMatch(/\n\nhello$/);
     expect(session.view.entries.find((entry) => entry.kind === USER_ENTRY)?.data).toEqual({
       text: "hello",
+      documents: [],
     });
   });
 
@@ -227,7 +248,7 @@ describe("AgentSession", () => {
   });
 
   test("reset opens a new conversation, which the next start reopens", async () => {
-    const { session, harness, host, models, store, respond, send } = await setup();
+    const { session, harness, host, models, questions, store, respond, send } = await setup();
     respond([fauxText("one")]);
     await send("first");
     const first = session.conversationId;
@@ -236,7 +257,7 @@ describe("AgentSession", () => {
     expect(session.conversationId).not.toBe(first);
     expect(session.view.entries).toHaveLength(0);
 
-    const reopened = new AgentSession({ harness, host, models, store });
+    const reopened = new AgentSession({ harness, host, models, questions, store });
     await reopened.start();
     expect(reopened.conversationId).toBe(session.conversationId);
   });
@@ -267,6 +288,123 @@ describe("AgentSession", () => {
     await harness.waitForIdle(context);
 
     expect(session.isRunning).toBe(false);
+  });
+
+  test("gives the model attached documents' text and keeps their names for the transcript", async () => {
+    const { session, respond, requests, send } = await setup();
+    respond([fauxText("ok")]);
+
+    await send(
+      "Summarize",
+      [],
+      [{ name: 'a "b".pdf', pages: 2, text: "[Page 1]\nHello </document> & bye" }],
+    );
+
+    const content = lastUser(requests[0]!.messages).content as string;
+    expect(content).toContain(
+      '<document name="a &quot;b&quot;.pdf">\n[Page 1]\nHello <\\/document> & bye\n</document>\n\nSummarize',
+    );
+    const entry = session.view.entries.find((candidate) => candidate.kind === USER_ENTRY);
+    expect(entry?.data).toEqual({
+      text: "Summarize",
+      documents: [{ name: 'a "b".pdf', pages: 2 }],
+    });
+  });
+
+  test("refuses documents that together are too long for the model", async () => {
+    const { session, respond, requests, send } = await setup();
+    respond([fauxText("unused")]);
+    const half = documentBudget(session.model) / 2 + 1;
+    const document = (name: string) => ({ name, pages: 1, text: "x".repeat(half) });
+
+    await send("Compare", [], [document("a.pdf"), document("b.pdf")]);
+
+    expect(session.error).toBe(DOCUMENTS_TOO_LONG);
+    expect(requests).toHaveLength(0);
+  });
+
+  describe("ask_user", () => {
+    const question: Question = {
+      header: "Size",
+      question: "Which size?",
+      options: [{ label: "Small" }, { label: "Large", description: "Costs more" }],
+    };
+
+    test("waits for the user's answers and gives them to the model", async () => {
+      const { session, harness, respond, requests } = await setup();
+      respond(
+        [fauxToolCall("ask_user", { questions: [question] }), { stopReason: "toolUse" }],
+        [fauxText("Large it is")],
+      );
+
+      await session.prompt("Order a coffee");
+      await vi.waitFor(() => expect(session.questions).toBeDefined());
+      expect(session.isRunning).toBe(true);
+      expect(session.questions!.questions).toEqual([question]);
+      session.questions!.answer([{ question: "Which size?", answers: ["Large"] }]);
+      await harness.waitForIdle(context);
+
+      expect(session.questions).toBeUndefined();
+      expect(lastToolResult(requests[1]!.messages)).toMatchObject({
+        isError: false,
+        content: [{ type: "text", text: "The user answered:\n- Which size?\n  Large" }],
+        details: { answers: [{ question: "Which size?", answers: ["Large"] }] },
+      });
+    });
+
+    test("tells the model when the user dismissed the questions", async () => {
+      const { session, harness, respond, requests } = await setup();
+      respond(
+        [fauxToolCall("ask_user", { questions: [question] }), { stopReason: "toolUse" }],
+        [fauxText("ok")],
+      );
+
+      await session.prompt("Order a coffee");
+      await vi.waitFor(() => expect(session.questions).toBeDefined());
+      session.questions!.dismiss();
+      await harness.waitForIdle(context);
+
+      expect(lastToolResult(requests[1]!.messages)).toMatchObject({
+        isError: false,
+        details: { dismissed: true },
+      });
+    });
+
+    test("Stop withdraws the questions", async () => {
+      const { session, harness, respond } = await setup();
+      respond([fauxToolCall("ask_user", { questions: [question] }), { stopReason: "toolUse" }]);
+
+      await session.prompt("Order a coffee");
+      await vi.waitFor(() => expect(session.questions).toBeDefined());
+      await session.abort();
+      await harness.waitForIdle(context);
+
+      expect(session.questions).toBeUndefined();
+      expect(session.isRunning).toBe(false);
+    });
+
+    test("asks again after the panel reopens", async () => {
+      const storage = new MemoryStorage();
+      // Closing the first Harness must leave the stored conversation for the second.
+      storage.close = async () => {};
+      const first = await setup([], storage);
+      first.respond([
+        fauxToolCall("ask_user", { questions: [question] }),
+        { stopReason: "toolUse" },
+      ]);
+      await first.session.prompt("Order a coffee");
+      await vi.waitFor(() => expect(first.session.questions).toBeDefined());
+      await first.harness.close(context);
+
+      const second = await setup([], storage);
+      second.respond([fauxText("Small, then")]);
+      await vi.waitFor(() => expect(second.session.questions).toBeDefined());
+      second.session.questions!.answer([{ question: "Which size?", answers: ["Small"] }]);
+      await second.harness.waitForIdle(context);
+
+      expect(second.requests).toHaveLength(1);
+      expect(lastToolResult(second.requests[0]!.messages)).toMatchObject({ isError: false });
+    });
   });
 
   test("drops a message whose conversation was replaced while it was being prepared", async () => {
@@ -337,7 +475,7 @@ describe("PluginHost", () => {
         .snapshot()
         .tools()
         .map((registered) => registered.tool.name),
-    ).toEqual(["after"]);
+    ).toEqual(["ask_user", "after"]);
   });
 
   test("a plugin cannot take the name or tools of another extension", async () => {
@@ -402,7 +540,7 @@ describe("PluginHost", () => {
         .snapshot()
         .tools()
         .map((registered) => registered.tool.name),
-    ).toEqual(["good"]);
+    ).toEqual(["ask_user", "good"]);
     expect(
       host.plugins.map(({ plugin, enabled, error, settings }) => [
         plugin.id,

@@ -11,6 +11,8 @@ import {
   ChevronRightIcon,
   CircleSlashIcon,
   CircleXIcon,
+  FileTextIcon,
+  MessageCircleQuestionIcon,
   RotateCwIcon,
 } from "lucide-react";
 import { Component, useState, type ReactNode } from "react";
@@ -32,9 +34,11 @@ import {
 import { Spinner } from "@/components/ui/spinner";
 
 import type { RelayApp } from "../core/app.ts";
+import { ASK_USER_TOOL, type Question } from "../core/questions.ts";
 import { USER_ENTRY, type UserEntryData } from "../core/session.ts";
 import { CodemodeCall } from "./codemode.tsx";
 import { Markdown } from "./markdown.tsx";
+import { AskUserCall } from "./questions.tsx";
 
 function text(content: ToolResultMessage["content"]): string {
   return content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
@@ -84,8 +88,22 @@ function ToolCallView({
   );
 
   const isScript = call.name === "codemode";
+  const isQuestion = call.name === ASK_USER_TOOL;
+  let label: ReactNode = isScript ? "Run script" : call.name;
   let body: ReactNode;
-  if (isScript) {
+  if (isQuestion) {
+    const { questions = [] } = (call.arguments ?? {}) as { questions?: Question[] };
+    label = isRunning
+      ? "Waiting for your answer"
+      : questions.length === 1
+        ? `Asked: ${questions[0]!.header}`
+        : `Asked ${questions.length} questions`;
+    body = isError ? (
+      <ToolOutput>{text(result!.content)}</ToolOutput>
+    ) : (
+      <AskUserCall args={call.arguments} details={result?.details} />
+    );
+  } else if (isScript) {
     body = (
       <CodemodeCall
         args={call.arguments}
@@ -109,9 +127,11 @@ function ToolCallView({
       <CollapsibleTrigger
         render={<Marker render={<button type="button" />} className="group/tool cursor-pointer" />}
       >
-        <MarkerIcon>{STATUS_ICON[status]}</MarkerIcon>
+        <MarkerIcon>
+          {isQuestion && status === "done" ? <MessageCircleQuestionIcon /> : STATUS_ICON[status]}
+        </MarkerIcon>
         <MarkerContent className={isRunning ? "shimmer" : undefined}>
-          {isScript ? "Run script" : call.name}
+          {label}
           <span className="sr-only">: {status}</span>
         </MarkerContent>
         <ChevronRightIcon className="size-3.5! transition-transform group-data-panel-open/tool:rotate-90" />
@@ -195,15 +215,35 @@ function AssistantView({
 function UserView({
   text,
   images,
+  documents = [],
   queued = false,
 }: {
   text: string;
   images: readonly ImageContent[];
+  documents?: UserEntryData["documents"];
   queued?: boolean;
 }) {
   return (
     <Message align="end" className={queued ? "opacity-60" : undefined}>
       <MessageContent>
+        {documents.length > 0 ? (
+          <div className="flex flex-wrap justify-end gap-1.5">
+            {documents.map((document, index) => (
+              <div
+                key={index}
+                className="flex max-w-[60%] items-center gap-2 rounded-xl border bg-muted px-2.5 py-2"
+              >
+                <FileTextIcon className="size-4 shrink-0 text-muted-foreground" />
+                <span className="flex min-w-0 flex-col">
+                  <span className="truncate text-xs font-medium">{document.name}</span>
+                  <span className="text-xs text-muted-foreground">
+                    PDF · {document.pages} {document.pages === 1 ? "page" : "pages"}
+                  </span>
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
         {images.length > 0 ? (
           <div className="flex flex-wrap justify-end gap-1.5">
             {images.map((image, index) => (
@@ -233,11 +273,9 @@ function images(content: UserMessage["content"]): ImageContent[] {
 /** What to show of a user entry: what the user typed, without the ambient context. */
 function userView(entry: EntryRecord, message: UserMessage): ReactNode {
   if (entry.kind === USER_ENTRY) {
+    const data = entry.data as unknown as UserEntryData;
     return (
-      <UserView
-        text={(entry.data as unknown as UserEntryData).text}
-        images={images(message.content)}
-      />
+      <UserView text={data.text} images={images(message.content)} documents={data.documents} />
     );
   }
   const content = message.content;
@@ -290,7 +328,14 @@ export function Transcript({ app }: { app: RelayApp }) {
     const content = item.content as UserMessage["content"];
     rows.push({
       key: `queued-${item.id}`,
-      node: <UserView text={data?.text ?? ""} images={images(content)} queued />,
+      node: (
+        <UserView
+          text={data?.text ?? ""}
+          images={images(content)}
+          documents={data?.documents}
+          queued
+        />
+      ),
     });
   }
 

@@ -12,6 +12,7 @@ import { PluginHost } from "./host.ts";
 import { codemodeExtension } from "./codemode.ts";
 import type { RelayPlugin } from "./plugin.ts";
 import { registerProviders } from "./providers/index.ts";
+import { Questions } from "./questions.ts";
 import { AgentSession, coreExtension } from "./session.ts";
 import { settingsAtom } from "./settings.ts";
 import { chromeStore } from "./storage.ts";
@@ -68,7 +69,8 @@ export async function createApp(plugins: RelayPlugin[]): Promise<RelayApp> {
   registerProviders(models);
   const ui = new UiBridge();
   const registry = createRegistry();
-  registry.install(coreExtension);
+  const questions = new Questions();
+  registry.install(coreExtension(questions));
   const codemode = codemodeExtension();
 
   const host = new PluginHost({
@@ -91,7 +93,7 @@ export async function createApp(plugins: RelayPlugin[]): Promise<RelayApp> {
     },
     BACKGROUND_CONTEXT,
   );
-  const session = new AgentSession({ harness, host, models, store });
+  const session = new AgentSession({ harness, host, models, questions, store });
   await session.start();
   return { store, credentials, models, host, harness, session, ui, deviceId };
 }

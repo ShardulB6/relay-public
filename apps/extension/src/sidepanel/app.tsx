@@ -10,9 +10,11 @@ import {
 } from "@earendil-works/pi-ai";
 import { useAtomValue, useSetAtom } from "jotai";
 import {
+  ArrowRightIcon,
   ArrowUpIcon,
   BrainIcon,
-  ImagePlusIcon,
+  FileTextIcon,
+  PaperclipIcon,
   RotateCwClockIcon,
   SettingsIcon,
   SquareIcon,
@@ -57,14 +59,24 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Toaster } from "@/components/ui/sonner";
+import { Spinner } from "@/components/ui/spinner";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 import type { RelayApp } from "../core/app.ts";
-import { acceptsImages, preferredModel } from "../core/session.ts";
+import {
+  acceptsImages,
+  documentBudget,
+  documentLength,
+  DOCUMENTS_TOO_LONG,
+  preferredModel,
+  type AttachedDocument,
+} from "../core/session.ts";
 import { settingsAtom, updateSettingsAtom } from "../core/settings.ts";
+import { documentFiles, PDF_TYPE, prepareDocument } from "./documents.ts";
 import { HistoryView } from "./history.tsx";
 import { IMAGE_TYPES, imageFiles, prepareImage } from "./images.ts";
+import { QuestionPanel, useQuestionFlow } from "./questions.tsx";
 import { LoginDialog, SettingsView, type LoginDialogState } from "./settings.tsx";
 import { Transcript } from "./transcript.tsx";
 
@@ -256,26 +268,84 @@ function ReasoningPicker({ app }: { app: RelayApp }) {
   );
 }
 
-/** Pending images, shown as tiles along the top of the message box. */
+/** What the next message carries besides its text. */
+interface Attached {
+  images: ImageContent[];
+  documents: AttachedDocument[];
+  /** Files still being read; the message waits for them. */
+  reading: { id: string; name: string }[];
+}
+
+const NOTHING_ATTACHED: Attached = { images: [], documents: [], reading: [] };
+
+const REMOVE_BUTTON =
+  "absolute top-1 right-1 flex size-5 items-center justify-center rounded-full bg-background/80 text-foreground opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-hover/tile:opacity-100 hover:bg-background focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none";
+
+/** Pending images and documents, shown as tiles along the top of the message box. */
 function Attachments({
-  images,
-  supported,
-  remove,
+  attached: { images, documents, reading },
+  supportsImages,
+  documentsFit,
+  setAttached,
 }: {
-  images: readonly ImageContent[];
-  supported: boolean;
-  remove: (index: number) => void;
+  attached: Attached;
+  supportsImages: boolean;
+  documentsFit: boolean;
+  setAttached: Dispatch<SetStateAction<Attached>>;
 }) {
-  if (images.length === 0) return null;
+  if (images.length === 0 && documents.length === 0 && reading.length === 0) return null;
   return (
     <InputGroupAddon align="block-start" className="flex-col items-start gap-1.5 pt-2.5">
-      <div className="flex max-w-full gap-2 overflow-x-auto pb-0.5">
+      <div className="flex max-w-full items-start gap-2 overflow-x-auto pb-0.5">
+        {reading.map((file) => (
+          <div
+            key={file.id}
+            role="status"
+            className="flex h-14 w-48 shrink-0 items-center gap-2 rounded-xl border bg-muted px-2.5"
+          >
+            <Spinner className="size-5 shrink-0 text-muted-foreground" />
+            <span className="flex min-w-0 flex-col">
+              <span className="truncate text-xs font-medium text-foreground">{file.name}</span>
+              <span className="text-xs font-normal">Reading…</span>
+            </span>
+          </div>
+        ))}
+        {documents.map((document, index) => (
+          <div
+            key={`document-${index}`}
+            className={cn(
+              "group/tile relative flex h-14 w-48 shrink-0 items-center gap-2 rounded-xl border bg-muted px-2.5 text-left",
+              !documentsFit && "border-destructive/60 opacity-60",
+            )}
+          >
+            <FileTextIcon className="size-5 shrink-0 text-muted-foreground" />
+            <span className="flex min-w-0 flex-col">
+              <span className="truncate text-xs font-medium text-foreground">{document.name}</span>
+              <span className="text-xs font-normal">
+                PDF · {document.pages} {document.pages === 1 ? "page" : "pages"}
+              </span>
+            </span>
+            <button
+              type="button"
+              aria-label={`Remove ${document.name}`}
+              onClick={() =>
+                setAttached((current) => ({
+                  ...current,
+                  documents: current.documents.filter((_, i) => i !== index),
+                }))
+              }
+              className={REMOVE_BUTTON}
+            >
+              <XIcon className="size-3" />
+            </button>
+          </div>
+        ))}
         {images.map((image, index) => (
           <div
-            key={index}
+            key={`image-${index}`}
             className={cn(
               "group/tile relative size-28 shrink-0 overflow-hidden rounded-xl border bg-muted",
-              !supported && "border-destructive/60 opacity-60",
+              !supportsImages && "border-destructive/60 opacity-60",
             )}
           >
             <img
@@ -286,18 +356,26 @@ function Attachments({
             <button
               type="button"
               aria-label={`Remove image ${index + 1}`}
-              onClick={() => remove(index)}
-              className="absolute top-1 right-1 flex size-5 items-center justify-center rounded-full bg-background/80 text-foreground opacity-0 shadow-sm backdrop-blur-sm transition-opacity group-hover/tile:opacity-100 hover:bg-background focus-visible:opacity-100 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+              onClick={() =>
+                setAttached((current) => ({
+                  ...current,
+                  images: current.images.filter((_, i) => i !== index),
+                }))
+              }
+              className={REMOVE_BUTTON}
             >
               <XIcon className="size-3" />
             </button>
           </div>
         ))}
       </div>
-      {!supported ? (
+      {images.length > 0 && !supportsImages ? (
         <p className="text-xs font-normal text-destructive">
           The selected model does not accept images. Remove them or pick another model.
         </p>
+      ) : null}
+      {!documentsFit ? (
+        <p className="text-xs font-normal text-destructive">{DOCUMENTS_TOO_LONG}</p>
       ) : null}
     </InputGroupAddon>
   );
@@ -308,62 +386,106 @@ function Composer({
   available,
   draft,
   setDraft,
-  images,
-  setImages,
+  attached,
+  setAttached,
 }: {
   app: RelayApp;
   available: readonly Model<Api>[];
   draft: string;
   setDraft: (draft: string) => void;
-  images: ImageContent[];
-  setImages: Dispatch<SetStateAction<ImageContent[]>>;
+  attached: Attached;
+  setAttached: Dispatch<SetStateAction<Attached>>;
 }) {
   const { session, ui } = app;
+  const { images, documents, reading } = attached;
   const fileInput = useRef<HTMLInputElement>(null);
   const supportsImages = acceptsImages(session.model);
+  // While the agent waits on questions, the message box answers them and the draft waits.
+  const asking = useQuestionFlow(session.questions);
 
-  const canSend = (draft.trim() || images.length > 0) && (images.length === 0 || supportsImages);
+  // Checked against the selected model, which may have changed since they were attached.
+  const documentsFit = documentLength(documents) <= documentBudget(session.model);
 
+  const canSend = asking
+    ? asking.canContinue
+    : (draft.trim() || images.length > 0 || documents.length > 0) &&
+      reading.length === 0 &&
+      (images.length === 0 || supportsImages) &&
+      documentsFit;
+
+  /**
+   * Images go to the model as they are; PDFs as their text, which every model reads. Each file
+   * shows as being read until it is ready, and the message cannot be sent until then.
+   */
   const attach = async (files: File[]) => {
-    if (files.length === 0) return;
-    if (!supportsImages) {
-      return ui.notify("The selected model does not accept images.", "error");
-    }
-    const added: ImageContent[] = [];
-    for (const file of files) {
-      try {
-        added.push(await prepareImage(file, session.model));
-      } catch (error) {
-        ui.notify(error instanceof Error ? error.message : String(error), "error");
-      }
-    }
-    if (added.length > 0) setImages((current) => [...current, ...added]);
+    await Promise.all(
+      files.map(async (file) => {
+        const id = crypto.randomUUID();
+        setAttached((current) => ({
+          ...current,
+          reading: [...current.reading, { id, name: file.name }],
+        }));
+        let added: Partial<Pick<Attached, "images" | "documents">> = {};
+        try {
+          if (file.type === PDF_TYPE) {
+            added = { documents: [await prepareDocument(file, session.model)] };
+          } else if (!supportsImages) {
+            ui.notify("The selected model does not accept images.", "error");
+          } else {
+            added = { images: [await prepareImage(file, session.model)] };
+          }
+        } catch (error) {
+          ui.notify(error instanceof Error ? error.message : String(error), "error");
+        }
+        setAttached((current) => ({
+          images: [...current.images, ...(added.images ?? [])],
+          documents: [...current.documents, ...(added.documents ?? [])],
+          reading: current.reading.filter((other) => other.id !== id),
+        }));
+      }),
+    );
   };
 
+  /** The images and PDFs in a paste or drop. */
+  const attachable = (transfer: DataTransfer | null) => [
+    ...imageFiles(transfer),
+    ...documentFiles(transfer),
+  ];
+
   const onPaste = (event: ClipboardEvent) => {
-    const files = imageFiles(event.clipboardData);
+    const files = attachable(event.clipboardData);
     if (files.length === 0) return;
     event.preventDefault();
     void attach(files);
   };
 
   const onDrop = (event: DragEvent) => {
-    const files = imageFiles(event.dataTransfer);
+    const files = attachable(event.dataTransfer);
     if (files.length === 0) return;
     event.preventDefault();
     void attach(files);
   };
 
   const submit = async () => {
+    if (asking) return asking.next();
     const text = draft.trim();
     if (!canSend) return;
     setDraft("");
-    setImages([]);
-    await session.prompt(text, images);
+    setAttached(NOTHING_ATTACHED);
+    await session.prompt(text, images, documents);
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
-    if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+    // Keys typed into an input method's composition are for it, not shortcuts.
+    if (event.nativeEvent.isComposing) return;
+    // With nothing typed, a number picks that option.
+    const plain = !event.ctrlKey && !event.metaKey && !event.altKey;
+    const option = asking && plain && !asking.written ? Number(event.key) : NaN;
+    if (asking && option >= 1 && option <= asking.question.options.length) {
+      event.preventDefault();
+      return asking.pick(asking.question.options[option - 1]!.label);
+    }
+    if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void submit();
     }
@@ -377,37 +499,51 @@ function Composer({
           void submit();
         }}
         onDragOver={(event) => {
-          if (supportsImages && imageFiles(event.dataTransfer).length > 0) event.preventDefault();
+          if (attachable(event.dataTransfer).length > 0) event.preventDefault();
         }}
         onDrop={onDrop}
       >
         {/* The group dims itself when anything inside is disabled; an empty draft only
             disables Send, so keep the field looking live. */}
         <InputGroup className="has-disabled:bg-transparent has-disabled:opacity-100 dark:has-disabled:bg-input/30">
-          <Attachments
-            images={images}
-            supported={supportsImages}
-            remove={(index) => setImages((current) => current.filter((_, i) => i !== index))}
-          />
+          {asking ? <QuestionPanel flow={asking} /> : null}
+          {asking ? null : (
+            <Attachments
+              attached={attached}
+              supportsImages={supportsImages}
+              documentsFit={documentsFit}
+              setAttached={setAttached}
+            />
+          )}
           <InputGroupTextarea
             aria-label="Message"
             rows={2}
             className="max-h-40"
-            placeholder={session.isRunning ? "Send a message to steer the agent…" : "Ask Relay"}
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
+            placeholder={
+              asking
+                ? asking.question.multiSelect
+                  ? "Add your own answer…"
+                  : "Or type your own answer…"
+                : session.isRunning
+                  ? "Send a message to steer the agent…"
+                  : "Ask Relay"
+            }
+            value={asking ? asking.written : draft}
+            onChange={(event) =>
+              asking ? asking.write(event.target.value) : setDraft(event.target.value)
+            }
             onKeyDown={onKeyDown}
             onPaste={onPaste}
           />
           <InputGroupAddon align="block-end">
             <ModelPicker app={app} available={available} />
             <ReasoningPicker app={app} />
-            {supportsImages ? (
+            {!asking ? (
               <>
                 <input
                   ref={fileInput}
                   type="file"
-                  accept={IMAGE_TYPES.join(",")}
+                  accept={[...(supportsImages ? IMAGE_TYPES : []), PDF_TYPE].join(",")}
                   multiple
                   hidden
                   onChange={(event) => {
@@ -421,14 +557,17 @@ function Composer({
                       <InputGroupButton
                         variant="ghost"
                         size="icon-xs"
-                        aria-label="Attach image"
+                        aria-label={supportsImages ? "Attach an image or PDF" : "Attach a PDF"}
                         onClick={() => fileInput.current?.click()}
                       />
                     }
                   >
-                    <ImagePlusIcon />
+                    <PaperclipIcon />
                   </TooltipTrigger>
-                  <TooltipContent>Attach an image (or paste one)</TooltipContent>
+                  <TooltipContent>
+                    {supportsImages ? "Attach an image or PDF" : "Attach a PDF"} (or paste or drop
+                    one)
+                  </TooltipContent>
                 </Tooltip>
               </>
             ) : null}
@@ -443,15 +582,22 @@ function Composer({
                   <SquareIcon className="fill-current" />
                 </InputGroupButton>
               ) : null}
-              <InputGroupButton
-                type="submit"
-                variant="default"
-                size="icon-xs"
-                aria-label="Send"
-                disabled={!canSend}
-              >
-                <ArrowUpIcon />
-              </InputGroupButton>
+              {asking ? (
+                <InputGroupButton type="submit" variant="default" size="xs" disabled={!canSend}>
+                  {asking.isLast ? "Submit" : "Next"}
+                  <ArrowRightIcon />
+                </InputGroupButton>
+              ) : (
+                <InputGroupButton
+                  type="submit"
+                  variant="default"
+                  size="icon-xs"
+                  aria-label="Send"
+                  disabled={!canSend}
+                >
+                  <ArrowUpIcon />
+                </InputGroupButton>
+              )}
             </div>
           </InputGroupAddon>
         </InputGroup>
@@ -467,8 +613,8 @@ function Chat({
   openSettings,
   draft,
   setDraft,
-  images,
-  setImages,
+  attached,
+  setAttached,
 }: {
   app: RelayApp;
   available: readonly Model<Api>[];
@@ -476,8 +622,8 @@ function Chat({
   openSettings: () => void;
   draft: string;
   setDraft: (draft: string) => void;
-  images: ImageContent[];
-  setImages: Dispatch<SetStateAction<ImageContent[]>>;
+  attached: Attached;
+  setAttached: Dispatch<SetStateAction<Attached>>;
 }) {
   const { session } = app;
   const isEmpty = session.view.entries.length === 0 && session.inbox.length === 0 && !session.error;
@@ -508,8 +654,8 @@ function Chat({
         available={available}
         draft={draft}
         setDraft={setDraft}
-        images={images}
-        setImages={setImages}
+        attached={attached}
+        setAttached={setAttached}
       />
     </>
   );
@@ -519,7 +665,7 @@ export function App({ app }: { app: RelayApp }) {
   const [view, setView] = useState<"chat" | "history" | "settings">("chat");
   // Kept here so an unsent message survives a visit to settings.
   const [draft, setDraft] = useState("");
-  const [images, setImages] = useState<ImageContent[]>([]);
+  const [attached, setAttached] = useState<Attached>(NOTHING_ATTACHED);
   const [dialog, setDialog] = useState<LoginDialogState>();
   const [, rerender] = useReducer((count: number) => count + 1, 0);
   const { auth, available } = useAuth(app);
@@ -630,8 +776,8 @@ export function App({ app }: { app: RelayApp }) {
             openSettings={() => setView("settings")}
             draft={draft}
             setDraft={setDraft}
-            images={images}
-            setImages={setImages}
+            attached={attached}
+            setAttached={setAttached}
           />
         )}
       </div>

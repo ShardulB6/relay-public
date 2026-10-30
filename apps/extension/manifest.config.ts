@@ -7,7 +7,7 @@ export default defineManifest({
   name: "Relay",
   description: "An extensible AI agent in your browser sidebar.",
   version: pkg.version,
-  minimum_chrome_version: "138",
+  minimum_chrome_version: "140",
   icons: {
     16: "icons/16x16.png",
     32: "icons/32x32.png",
