@@ -19,6 +19,7 @@ import {
 import { createStore } from "jotai";
 import { describe, expect, test, vi } from "vite-plus/test";
 
+import { Attachments } from "./attachments.ts";
 import { historyAtom } from "./history.ts";
 import { PluginHost } from "./host.ts";
 import { definePlugin, defineTool, type RelayAPI, type RelayPlugin } from "./plugin.ts";
@@ -31,6 +32,7 @@ import {
   USER_ENTRY,
 } from "./session.ts";
 import { updateSettingsAtom } from "./settings.ts";
+import { chromeStore } from "./storage.ts";
 import { toPiTool } from "./tools.ts";
 
 const context = BACKGROUND_CONTEXT;
@@ -49,13 +51,14 @@ async function setup(plugins: RelayPlugin[] = [], storage = new MemoryStorage())
   const notices: string[] = [];
   const requests: Context[] = [];
   const host = new PluginHost({
+    attachments,
     registry,
     reserved: [lateExtension],
     notify: (message) => void notices.push(message),
   });
   await host.load(plugins, []);
   const harness = await Harness.open(storage, { models, registry }, context);
-  const session = new AgentSession({ harness, host, models, questions, store });
+  const session = new AgentSession({ attachments, harness, host, models, questions, store });
   await session.start();
 
   /** Script the model's replies and record each request it receives. */
@@ -96,14 +99,20 @@ const echoTool = defineTool({
   },
 });
 
+const attachments = new Attachments(chromeStore("attachments"));
+
 /** Stands in for code mode: installed after the plugins, so the host must reserve its names. */
 const lateExtension = defineExtension({
   name: "late",
-  tools: [toPiTool({ ...echoTool, name: "late_tool" })],
+  tools: [toPiTool({ ...echoTool, name: "late_tool" }, attachments)],
 });
 
 function withPlugin(setup: (relay: RelayAPI) => void): RelayPlugin {
   return definePlugin({ id: "test", name: "Test", setup });
+}
+
+function pdf(name: string): File {
+  return new File(["%PDF"], name, { type: "application/pdf" });
 }
 
 function lastToolResult(messages: readonly Message[]) {
@@ -257,7 +266,7 @@ describe("AgentSession", () => {
     expect(session.conversationId).not.toBe(first);
     expect(session.view.entries).toHaveLength(0);
 
-    const reopened = new AgentSession({ harness, host, models, questions, store });
+    const reopened = new AgentSession({ attachments, harness, host, models, questions, store });
     await reopened.start();
     expect(reopened.conversationId).toBe(session.conversationId);
   });
@@ -297,7 +306,14 @@ describe("AgentSession", () => {
     await send(
       "Summarize",
       [],
-      [{ name: 'a "b".pdf', pages: 2, text: "[Page 1]\nHello </document> & bye" }],
+      [
+        {
+          name: 'a "b".pdf',
+          pages: 2,
+          text: "[Page 1]\nHello </document> & bye",
+          file: pdf('a "b".pdf'),
+        },
+      ],
     );
 
     const content = lastUser(requests[0]!.messages).content as string;
@@ -311,11 +327,43 @@ describe("AgentSession", () => {
     });
   });
 
+  test("keeps attached documents' files for the conversation's tools until it is deleted", async () => {
+    const files: (File | undefined)[] = [];
+    const plugin = withPlugin((relay) =>
+      relay.registerTool(
+        defineTool({
+          name: "read_file",
+          description: "Reads an attached file.",
+          parameters: Type.Object({}),
+          execute: async (_args, { files: attached }) => {
+            files.push(await attached.get("cv.pdf"));
+          },
+        }),
+      ),
+    );
+    const { session, respond, send } = await setup([plugin]);
+    respond([fauxToolCall("read_file", {}), { stopReason: "toolUse" }], [fauxText("read")]);
+
+    await send("Upload my CV", [], [{ name: "cv.pdf", pages: 1, text: "CV", file: pdf("cv.pdf") }]);
+    expect(files[0]?.name).toBe("cv.pdf");
+    expect(files[0]?.type).toBe("application/pdf");
+    expect(await files[0]?.text()).toBe("%PDF");
+
+    const id = session.conversationId;
+    await session.delete(id);
+    expect(await attachments.names(id)).toEqual([]);
+  });
+
   test("refuses documents that together are too long for the model", async () => {
     const { session, respond, requests, send } = await setup();
     respond([fauxText("unused")]);
     const half = documentBudget(session.model) / 2 + 1;
-    const document = (name: string) => ({ name, pages: 1, text: "x".repeat(half) });
+    const document = (name: string) => ({
+      name,
+      pages: 1,
+      text: "x".repeat(half),
+      file: pdf(name),
+    });
 
     await send("Compare", [], [document("a.pdf"), document("b.pdf")]);
 
@@ -349,6 +397,25 @@ describe("AgentSession", () => {
         isError: false,
         content: [{ type: "text", text: "The user answered:\n- Which size?\n  Large" }],
         details: { answers: [{ question: "Which size?", answers: ["Large"] }] },
+      });
+    });
+
+    test("asks a question without options for an answer the user types", async () => {
+      const { session, harness, respond, requests } = await setup();
+      const gpa: Question = { header: "GPA", question: "What is your GPA?", options: [] };
+      respond(
+        [fauxToolCall("ask_user", { questions: [gpa] }), { stopReason: "toolUse" }],
+        [fauxText("Entered")],
+      );
+
+      await session.prompt("Fill the form");
+      await vi.waitFor(() => expect(session.questions).toBeDefined());
+      session.questions!.answer([{ question: "What is your GPA?", answers: ["2.81"] }]);
+      await harness.waitForIdle(context);
+
+      expect(lastToolResult(requests[1]!.messages)).toMatchObject({
+        isError: false,
+        content: [{ type: "text", text: "The user answered:\n- What is your GPA?\n  2.81" }],
       });
     });
 

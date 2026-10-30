@@ -53,7 +53,8 @@ is the agent with its code mode, model providers, settings and the chat view.
 ## Tools
 
 A tool is a function. `execute` gets the arguments, validated against `parameters` (a TypeBox
-schema), and an abort `signal`. It returns the result, and throws to fail: the agent sees the
+schema), an abort `signal`, and `files`: the files the user attached to the conversation, by
+name (`files.get("resume.pdf")`). It returns the result, and throws to fail: the agent sees the
 error's message.
 
 - A string reaches the model as text, an image block (`{ type: "image", data, mimeType }`) as an

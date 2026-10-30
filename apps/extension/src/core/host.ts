@@ -6,6 +6,7 @@ import {
   type Registry,
 } from "@earendil-works/pi-durable";
 
+import type { Attachments } from "./attachments.ts";
 import type {
   RelayAPI,
   RelayEventHandler,
@@ -28,6 +29,8 @@ export interface HostDependencies {
   reserved: readonly Extension[];
   /** Report a plugin failure to the user. */
   notify(message: string): void;
+  /** The files tools get from the conversation they run in. */
+  attachments: Attachments;
 }
 
 export interface LoadedPlugin {
@@ -107,7 +110,7 @@ export class PluginHost {
       this.#deps.registry.install(
         defineExtension({
           name: plugin.id,
-          tools: tools.map(toPiTool),
+          tools: tools.map((tool) => toPiTool(tool, this.#deps.attachments)),
           sections: prompts.map((text, index) =>
             section(`${plugin.id}-${index}`, () => text, { tag: false }),
           ),

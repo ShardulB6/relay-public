@@ -156,44 +156,46 @@ export function QuestionPanel({ flow }: { flow: QuestionFlow }) {
         </div>
       </div>
       <p className="text-sm font-medium text-pretty">{question.question}</p>
-      <div
-        role={question.multiSelect ? "group" : "radiogroup"}
-        aria-label={question.question}
-        className="flex flex-col gap-1"
-      >
-        {question.options.map((option, i) => {
-          const picked = flow.isPicked(option.label);
-          return (
-            <button
-              key={option.label}
-              type="button"
-              role={question.multiSelect ? "checkbox" : "radio"}
-              aria-checked={picked}
-              onClick={() => flow.pick(option.label)}
-              className={cn(
-                "flex items-start gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-colors hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none dark:hover:bg-muted/50",
-                picked && "border-primary/60 bg-muted dark:bg-muted/50",
-              )}
-            >
-              <kbd
+      {question.options.length > 0 ? (
+        <div
+          role={question.multiSelect ? "group" : "radiogroup"}
+          aria-label={question.question}
+          className="flex flex-col gap-1"
+        >
+          {question.options.map((option) => {
+            const picked = flow.isPicked(option.label);
+            return (
+              <button
+                key={option.label}
+                type="button"
+                role={question.multiSelect ? "checkbox" : "radio"}
+                aria-checked={picked}
+                onClick={() => flow.pick(option.label)}
                 className={cn(
-                  "mt-px flex size-5 shrink-0 items-center justify-center rounded-md border font-mono text-[0.7rem] text-muted-foreground",
-                  picked && "border-primary bg-primary text-primary-foreground",
+                  "flex items-start gap-2.5 rounded-lg border px-2.5 py-2 text-left transition-colors hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none dark:hover:bg-muted/50",
+                  picked && "border-primary/60 bg-muted dark:bg-muted/50",
                 )}
               >
-                {picked ? <CheckIcon className="size-3" /> : i + 1}
-              </kbd>
-              <span className="flex min-w-0 flex-col">
-                <span className="text-sm">{option.label}</span>
-                {option.description ? (
-                  <span className="text-xs text-muted-foreground">{option.description}</span>
-                ) : null}
-              </span>
-            </button>
-          );
-        })}
-      </div>
-      {question.multiSelect ? (
+                <span
+                  className={cn(
+                    "mt-px flex size-5 shrink-0 items-center justify-center rounded-md border",
+                    picked && "border-primary bg-primary text-primary-foreground",
+                  )}
+                >
+                  {picked ? <CheckIcon className="size-3" /> : null}
+                </span>
+                <span className="flex min-w-0 flex-col">
+                  <span className="text-sm">{option.label}</span>
+                  {option.description ? (
+                    <span className="text-xs text-muted-foreground">{option.description}</span>
+                  ) : null}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : null}
+      {question.multiSelect && question.options.length > 0 ? (
         <p className="text-xs text-muted-foreground">Pick any that apply.</p>
       ) : null}
     </InputGroupAddon>

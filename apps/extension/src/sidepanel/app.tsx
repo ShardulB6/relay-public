@@ -478,13 +478,6 @@ function Composer({
   const onKeyDown = (event: KeyboardEvent) => {
     // Keys typed into an input method's composition are for it, not shortcuts.
     if (event.nativeEvent.isComposing) return;
-    // With nothing typed, a number picks that option.
-    const plain = !event.ctrlKey && !event.metaKey && !event.altKey;
-    const option = asking && plain && !asking.written ? Number(event.key) : NaN;
-    if (asking && option >= 1 && option <= asking.question.options.length) {
-      event.preventDefault();
-      return asking.pick(asking.question.options[option - 1]!.label);
-    }
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       void submit();
@@ -521,9 +514,11 @@ function Composer({
             className="max-h-40"
             placeholder={
               asking
-                ? asking.question.multiSelect
-                  ? "Add your own answer…"
-                  : "Or type your own answer…"
+                ? asking.question.options.length === 0
+                  ? "Type your answer…"
+                  : asking.question.multiSelect
+                    ? "Add your own answer…"
+                    : "Or type your own answer…"
                 : session.isRunning
                   ? "Send a message to steer the agent…"
                   : "Ask Relay"

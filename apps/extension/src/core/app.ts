@@ -4,6 +4,7 @@ import { createRegistry, Harness } from "@earendil-works/pi-durable";
 import { storage } from "@wxt-dev/storage";
 import { createStore, type Store } from "jotai";
 
+import { Attachments } from "./attachments.ts";
 import { StoredCredentials } from "./credentials.ts";
 import { openConversationStorage } from "./durable/open.ts";
 import { Emitter } from "./events.ts";
@@ -73,7 +74,9 @@ export async function createApp(plugins: RelayPlugin[]): Promise<RelayApp> {
   registry.install(coreExtension(questions));
   const codemode = codemodeExtension();
 
+  const attachments = new Attachments(chromeStore("attachments"));
   const host = new PluginHost({
+    attachments,
     registry,
     reserved: [codemode],
     notify: (message) => ui.notify(message, "error"),
@@ -93,7 +96,7 @@ export async function createApp(plugins: RelayPlugin[]): Promise<RelayApp> {
     },
     BACKGROUND_CONTEXT,
   );
-  const session = new AgentSession({ harness, host, models, questions, store });
+  const session = new AgentSession({ attachments, harness, host, models, questions, store });
   await session.start();
   return { store, credentials, models, host, harness, session, ui, deviceId };
 }

@@ -21,10 +21,12 @@ function pdfFile(name = "notes.pdf") {
 
 describe("prepareDocument", () => {
   test("reads a PDF's text page by page", async () => {
-    expect(await prepareDocument(pdfFile(), undefined)).toEqual({
+    const file = pdfFile();
+    expect(await prepareDocument(file, undefined)).toEqual({
       name: "notes.pdf",
       pages: 2,
       text: "[Page 1]\nHello Relay\n\n[Page 2]\nSecond page",
+      file,
     });
   });
 

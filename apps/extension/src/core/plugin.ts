@@ -73,7 +73,19 @@ export interface Tool<P extends TSchema = TSchema> {
    * Do the work and return the result: a string is text, an image block is an image, anything
    * else is sent as JSON (scripts get the value itself). Throw to fail; the agent sees the error.
    */
-  execute(args: Static<P>, options: { signal: AbortSignal }): Promise<unknown>;
+  execute(args: Static<P>, options: ToolOptions): Promise<unknown>;
+}
+
+export interface ToolOptions {
+  signal: AbortSignal;
+  /** The files the user attached to the conversation the tool runs in. */
+  files: AttachedFiles;
+}
+
+/** Files the user attached to a conversation, by name. */
+export interface AttachedFiles {
+  names(): Promise<string[]>;
+  get(name: string): Promise<File | undefined>;
 }
 
 /** Identity helper that infers `execute`'s argument types from `parameters`. */

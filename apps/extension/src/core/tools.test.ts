@@ -23,7 +23,11 @@ import { createCodemodeExtension } from "@earendil-works/pi-durable/codemode";
 import { expect, test } from "vite-plus/test";
 
 import { defineTool } from "./plugin.ts";
+import { Attachments } from "./attachments.ts";
+import { chromeStore } from "./storage.ts";
 import { toPiTool } from "./tools.ts";
+
+const attachments = new Attachments(chromeStore("attachments"));
 
 const context = BACKGROUND_CONTEXT;
 const IMAGE = { type: "image", data: "iVBORw0KGgo=", mimeType: "image/png" };
@@ -49,7 +53,9 @@ async function runScript(code: string) {
     }),
   ];
   const registry = createRegistry();
-  registry.install(defineExtension({ name: "test", tools: tools.map(toPiTool) }));
+  registry.install(
+    defineExtension({ name: "test", tools: tools.map((tool) => toPiTool(tool, attachments)) }),
+  );
   const wasm = createRequire(import.meta.url).resolve("quickjs-wasi/quickjs.wasm");
   registry.install(
     createCodemodeExtension({
@@ -115,6 +121,7 @@ test("a tool's callers decide whether the model, scripts, or both may call it", 
         ...(callers ? { callers } : {}),
         execute: async () => "ok",
       }),
+      attachments,
     );
   expect(tool(["scripts"]).callers).toEqual(["tools"]);
   expect(tool(["model"]).callers).toEqual(["model"]);

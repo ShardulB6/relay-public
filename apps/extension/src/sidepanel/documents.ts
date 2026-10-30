@@ -10,7 +10,8 @@ export const PDF_TYPE = "application/pdf";
 
 /**
  * Read a PDF's text for the model. No supported provider takes PDFs themselves, so the model
- * gets the text only: no images, scans or layout.
+ * gets the text only: no images, scans or layout. The file itself goes with it, for tools to
+ * upload.
  */
 export async function prepareDocument(
   file: File,
@@ -47,7 +48,7 @@ export async function prepareDocument(
     if (text.length > documentBudget(model)) {
       throw new Error(`${file.name} is too long for the selected model.`);
     }
-    return { name: file.name, pages: pdf.numPages, text };
+    return { name: file.name, pages: pdf.numPages, text, file };
   } catch (error) {
     if (error instanceof PasswordException) {
       throw new Error(`${file.name} is password-protected.`, { cause: error });

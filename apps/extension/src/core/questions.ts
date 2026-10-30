@@ -13,7 +13,11 @@ const QuestionSchema = Type.Object({
       label: Type.String({ description: "The choice, in a few words." }),
       description: Type.Optional(Type.String({ description: "What picking it means." })),
     }),
-    { minItems: 2, maxItems: 4 },
+    {
+      maxItems: 4,
+      description:
+        "2–4 choices, or none when the answer is something the user types, such as a number, name or date.",
+    },
   ),
   multiSelect: Type.Optional(
     Type.Boolean({ description: "Whether the user may pick more than one option." }),
@@ -125,7 +129,7 @@ const NEVER_ABORTED = new AbortController().signal;
 export function askUserTool(questions: Questions): ToolRegistration {
   return defineTool({
     name: ASK_USER_TOOL,
-    description: `Ask the user 1–4 multiple-choice questions and wait for the answers. Use it when you need a decision only the user can make, are unsure what they want, or need their go-ahead before something hard to undo; do not use it when a sensible default exists. Each question has 2–4 options; the user can always write their own answer instead.`,
+    description: `Ask the user 1–4 multiple-choice questions and wait for the answers. Use it when you need a decision only the user can make, are unsure what they want, or need their go-ahead before something hard to undo; do not use it when a sensible default exists. Give a question 2–4 options when it has a few likely answers, and none when the user must type the answer (a number, a name, a date): options that only stand in for typing it, such as "Enter my GPA", cannot answer it. The user can always write their own answer instead of picking.`,
     parameters: AskUserParameters,
     structuredOutputSchema: Type.Array(AnswerSchema),
     replay: "safe",

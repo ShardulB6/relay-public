@@ -6,6 +6,7 @@ import {
   type ToolRegistration,
 } from "@earendil-works/pi-durable";
 
+import type { Attachments } from "./attachments.ts";
 import type { Tool } from "./plugin.ts";
 
 const NEVER_ABORTED = new AbortController().signal;
@@ -40,7 +41,7 @@ function abortable<T>(work: Promise<T>, signal: AbortSignal): Promise<T> {
  * value becomes both the output the model reads and the value scripts get. pi hands each caller
  * only its own: the model never sees `structuredOutput`, and scripts never see `output`.
  */
-export function toPiTool(tool: Tool): ToolRegistration {
+export function toPiTool(tool: Tool, attachments: Attachments): ToolRegistration {
   return definePiTool({
     name: tool.name,
     description: tool.description,
@@ -49,9 +50,13 @@ export function toPiTool(tool: Tool): ToolRegistration {
       caller === "scripts" ? "tools" : "model",
     ),
     structuredOutputSchema: tool.returns ?? Type.Unknown(),
-    async execute(args, _api, context) {
+    async execute(args, api, context) {
       const signal = context.abortSignal ?? NEVER_ABORTED;
-      const value = await abortable(tool.execute(args, { signal }), signal);
+      const files = {
+        names: () => attachments.names(api.conversationId),
+        get: (name: string) => attachments.get(api.conversationId, name),
+      };
+      const value = await abortable(tool.execute(args, { signal, files }), signal);
       return { output: forModel(value), structuredOutput: (value ?? null) as JsonValue };
     },
   }) as ToolRegistration;

@@ -1,8 +1,8 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    // Chrome 138 is the minimum; it has ES2024 (Promise.withResolvers).
-    "lib": ["ES2024", "DOM", "DOM.Iterable"],
+    // Chrome 140 is the minimum; it has ES2024 (Promise.withResolvers) and Uint8Array base64.
+    "lib": ["ES2024", "ESNext.TypedArrays", "DOM", "DOM.Iterable"],
     "types": ["vite/client", "chrome"],
     "resolveJsonModule": true,
     "jsx": "react-jsx",

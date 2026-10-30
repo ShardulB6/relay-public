@@ -24,6 +24,7 @@ import {
 import { storage } from "@wxt-dev/storage";
 import type { Store } from "jotai";
 
+import type { Attachments } from "./attachments.ts";
 import { Emitter } from "./events.ts";
 import { fallbackTitle, generateTitle, historyAtom } from "./history.ts";
 import type { PluginHost } from "./host.ts";
@@ -92,11 +93,15 @@ export interface UserEntryData {
   documents: { name: string; pages: number }[];
 }
 
-/** A document attached to a message, read to text before it is sent. */
+/**
+ * A document attached to a message, read to text before it is sent. The file itself is kept
+ * with the conversation, for tools to upload.
+ */
 export interface AttachedDocument {
   name: string;
   pages: number;
   text: string;
+  file: File;
 }
 
 /** The conversation the side panel shows; the root conversation until the user starts another. */
@@ -149,6 +154,8 @@ export function userContent(
 }
 
 export interface SessionDependencies {
+  /** The files attached to each conversation. */
+  attachments: Attachments;
   harness: Harness;
   host: PluginHost;
   models: MutableModels;
@@ -253,22 +260,32 @@ export class AgentSession {
         ...(await this.#deps.host.beforeAgentStart(text)),
       ];
       if (!current()) return;
+      // Before the message, so a tool the agent calls for it finds the files. The model gets the
+      // names they are stored under, which differ when one is taken.
+      const names = await this.#deps.attachments.save(
+        conversation.id,
+        documents.map((document) => document.file),
+      );
+      // Deleted while they were being stored: nothing else would remove them.
+      if (this.#deleted.has(conversation.id)) await this.#deps.attachments.delete(conversation.id);
+      if (!current()) return;
+      const stored = documents.map((document, i) => ({ ...document, name: names[i]! }));
       await conversation.submit(
         {
           type: "input",
-          content: userContent(ambient, text, images, documents),
+          content: userContent(ambient, text, images, stored),
           whenBusy: "steer",
           entry: {
             kind: USER_ENTRY,
             data: {
               text,
-              documents: documents.map(({ name, pages }) => ({ name, pages })),
+              documents: stored.map(({ name, pages }) => ({ name, pages })),
             } satisfies UserEntryData,
           },
         },
         context,
       );
-      await this.#record(conversation.id, text.trim() || documents[0]?.name || "");
+      await this.#record(conversation.id, text.trim() || stored[0]?.name || "");
     } catch (error) {
       this.error = error instanceof Error ? error.message : String(error);
     } finally {
@@ -318,6 +335,7 @@ export class AgentSession {
     await this.#deps.store.set(historyAtom, (entries) =>
       entries.filter((entry) => entry.id !== id),
     );
+    await this.#deps.attachments.delete(id);
     if (id === this.conversationId) await this.reset();
   }
 

@@ -13,5 +13,6 @@ Notes:
 
 - Return only what you need. To read or extract content, prefer \`tools.page_evaluate({ expression })\` with one expression that returns structured JSON, for example \`"document.querySelector('article').innerText"\`. The expression is regular browser JavaScript running in the page, unlike the script itself.
 - Use \`image(await tools.page_screenshot({}))\` when layout or visuals matter. Saving images to files is not available here; the image itself still reaches you.
+- To upload a file into a form, use \`tools.page_upload({ name })\` with the name of a file the user attached (their PDFs, shown as \`<document name="...">\`). If they have not attached the file, ask them to attach it rather than typing its contents into the form.
 - When a page needs the user (login, CAPTCHA, two-factor code, payment confirmation), stop and ask them to do it in the tab, then continue.
 - Only http(s) pages can be controlled; browser-internal pages (chrome://, the extension store) and extension pages cannot. Open a regular page with \`tools.tabs_open({ url })\`.`;
