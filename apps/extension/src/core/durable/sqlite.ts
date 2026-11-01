@@ -129,11 +129,18 @@ class WorkerSqliteDatabase extends Executor implements SqliteDatabase {
   }
 }
 
-/** Open the database at `path` through `worker`, which serves `SqliteRequest`s. */
-export async function connectSqlite(worker: SqliteWorker, path: string): Promise<SqliteDatabase> {
+/**
+ * Open the database at `path` through `worker`, which serves `SqliteRequest`s. A `fresh` database
+ * starts empty: what was stored at `path` is deleted first.
+ */
+export async function connectSqlite(
+  worker: SqliteWorker,
+  path: string,
+  fresh = false,
+): Promise<SqliteDatabase> {
   const connection = new WorkerConnection(worker);
   try {
-    await connection.send({ op: "open", path });
+    await connection.send({ op: "open", path, fresh });
   } catch (error) {
     connection.terminate();
     throw error;
@@ -142,9 +149,10 @@ export async function connectSqlite(worker: SqliteWorker, path: string): Promise
 }
 
 /** Open the database at `path` in the extension's origin private file system. */
-export function openWorkerSqlite(path: string): Promise<SqliteDatabase> {
+export function openWorkerSqlite(path: string, fresh: boolean): Promise<SqliteDatabase> {
   return connectSqlite(
     new Worker(new URL("./sqlite-worker.ts", import.meta.url), { type: "module" }),
     path,
+    fresh,
   );
 }

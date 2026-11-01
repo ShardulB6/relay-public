@@ -43,7 +43,7 @@ import {
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 
-import type { RelayApp } from "../core/app.ts";
+import { clearHistoryOnReload, type RelayApp } from "../core/app.ts";
 import { errorMessage } from "../core/errors.ts";
 import type { RelayPlugin, SettingsPage } from "../core/plugin.ts";
 import { settingsAtom, updateSettingsAtom } from "../core/settings.ts";
@@ -297,6 +297,68 @@ function TitleModelField({ app, available }: { app: RelayApp; available: readonl
   );
 }
 
+/** Deletes every conversation, after asking. Relay reloads to finish. */
+function ClearHistoryField() {
+  const [confirming, setConfirming] = useState(false);
+  const [error, setError] = useState<string>();
+  const [clearing, setClearing] = useState(false);
+
+  const clear = async () => {
+    setClearing(true);
+    try {
+      await clearHistoryOnReload();
+      location.reload();
+    } catch (cause) {
+      setError(errorMessage(cause));
+      setClearing(false);
+    }
+  };
+
+  return (
+    <Field orientation="horizontal">
+      <FieldContent>
+        <FieldLabel>Clear all history</FieldLabel>
+        <FieldDescription>
+          Deletes every conversation, with its messages and attached files.
+        </FieldDescription>
+      </FieldContent>
+      <Button variant="destructive" size="sm" onClick={() => setConfirming(true)}>
+        Clear
+      </Button>
+      <Dialog
+        open={confirming}
+        onOpenChange={(open) => {
+          setConfirming(open);
+          if (!open) setError(undefined);
+        }}
+      >
+        <DialogContent showCloseButton={false}>
+          <DialogHeader>
+            <DialogTitle>Clear all history?</DialogTitle>
+            <DialogDescription>
+              Every conversation is deleted from this browser, with its messages and attached files,
+              and cannot be restored. A running reply stops. Relay reloads to finish.
+            </DialogDescription>
+          </DialogHeader>
+          {error ? (
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          ) : null}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirming(false)}>
+              Cancel
+            </Button>
+            <Button variant="destructive" disabled={clearing} onClick={() => void clear()}>
+              Clear all history
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </Field>
+  );
+}
+
 export function SettingsView({
   app,
   auth,
@@ -395,7 +457,10 @@ export function SettingsView({
 
         <FieldSet>
           <FieldLegend>Conversations</FieldLegend>
-          <TitleModelField app={app} available={available} />
+          <FieldGroup>
+            <TitleModelField app={app} available={available} />
+            <ClearHistoryField />
+          </FieldGroup>
         </FieldSet>
 
         <FieldSet>

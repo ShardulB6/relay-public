@@ -60,6 +60,13 @@ export class Attachments {
     return this.#change(() => this.#store.delete(String(conversationId)));
   }
 
+  /** Delete the files of every conversation. */
+  clear(): Promise<void> {
+    return this.#change(async () => {
+      for (const key of await this.#store.keys()) await this.#store.delete(key);
+    });
+  }
+
   #change<T>(change: () => Promise<T>): Promise<T> {
     const result = this.#queue.then(change);
     this.#queue = result.catch(() => {});

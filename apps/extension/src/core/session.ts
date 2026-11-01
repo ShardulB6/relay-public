@@ -123,7 +123,8 @@ export interface AttachedDocument {
 }
 
 /** The conversation the side panel shows; the root conversation until the user starts another. */
-const conversationItem = storage.defineItem<ConversationId>("local:relay:conversation");
+/** The conversation the side panel showed last, to show again when it opens. */
+export const conversationItem = storage.defineItem<ConversationId>("local:relay:conversation");
 
 const context = BACKGROUND_CONTEXT;
 

@@ -31,3 +31,13 @@ test("saves and deletes that overlap apply in order", async () => {
   await Promise.all([saving, attachments.delete(id)]);
   expect(await attachments.names(id)).toEqual([]);
 });
+
+test("clearing deletes the files of every conversation", async () => {
+  const attachments = new Attachments(chromeStore("attachments"));
+  const other = 2 as ConversationId;
+  await attachments.save(id, [pdf("a.pdf")]);
+  await attachments.save(other, [pdf("b.pdf")]);
+  await attachments.clear();
+  expect(await attachments.names(id)).toEqual([]);
+  expect(await attachments.names(other)).toEqual([]);
+});

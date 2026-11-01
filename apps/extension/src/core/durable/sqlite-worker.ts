@@ -7,9 +7,11 @@ import type { SqliteRequest, SqliteResponse } from "./sqlite-protocol.ts";
 
 // SQLite on the origin private file system. The SAH pool VFS needs no cross-origin isolation, but
 // only one connection may hold it at a time, so the app takes a lock before starting this worker.
-const handle = createSqliteHandler(async (path) => {
+const handle = createSqliteHandler(async (path, fresh) => {
   const sqlite3 = await sqlite3InitModule();
   const pool = await sqlite3.installOpfsSAHPoolVfs({ name: "relay" });
+  // The pool holds only this database, so wiping it also drops any journal left beside it.
+  if (fresh) await pool.wipeFiles();
   return new pool.OpfsSAHPoolDb(path);
 });
 

@@ -3,10 +3,11 @@ import type { Database, PreparedStatement } from "@sqlite.org/sqlite-wasm";
 import type { SqliteRequest } from "./sqlite-protocol.ts";
 
 /**
- * Serves `SqliteRequest`s against one connection. `open` makes the connection for a path; the
- * worker opens it on the origin private file system, tests in memory.
+ * Serves `SqliteRequest`s against one connection. `open` makes the connection for a path, first
+ * deleting what is stored there when `fresh`; the worker opens it on the origin private file
+ * system, tests in memory.
  */
-export function createSqliteHandler(open: (path: string) => Promise<Database>) {
+export function createSqliteHandler(open: (path: string, fresh: boolean) => Promise<Database>) {
   let db: Database | undefined;
   // pi-durable runs a small set of statements over and over.
   const statements = new Map<string, PreparedStatement>();
@@ -22,7 +23,7 @@ export function createSqliteHandler(open: (path: string) => Promise<Database>) {
 
   return async function handle(request: SqliteRequest): Promise<unknown> {
     if (request.op === "open") {
-      db = await open(request.path);
+      db = await open(request.path, request.fresh);
       return;
     }
     if (!db) throw new Error("The database is not open");

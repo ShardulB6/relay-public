@@ -8,17 +8,30 @@ import { Attachments } from "./attachments.ts";
 import { StoredCredentials } from "./credentials.ts";
 import { openConversationStorage } from "./durable/open.ts";
 import { Emitter } from "./events.ts";
-import { historyAtom } from "./history.ts";
+import { historyAtom, historyItem } from "./history.ts";
 import { PluginHost } from "./host.ts";
 import { codemodeExtension } from "./codemode.ts";
 import type { RelayPlugin } from "./plugin.ts";
 import { registerProviders } from "./providers/index.ts";
 import { Questions } from "./questions.ts";
-import { AgentSession, coreExtension } from "./session.ts";
+import { AgentSession, conversationItem, coreExtension } from "./session.ts";
 import { settingsAtom } from "./settings.ts";
 import { chromeStore } from "./storage.ts";
 
 const deviceIdItem = storage.defineItem<string>("local:relay:deviceId");
+
+/**
+ * Set to clear every conversation. pi-durable cannot delete conversations from storage it has
+ * open, so the next start opens it empty, then clears what Relay keeps beside it.
+ */
+const clearHistoryItem = storage.defineItem<boolean>("local:relay:clearHistory", {
+  fallback: false,
+});
+
+/** Clear every conversation once the side panel reloads. */
+export function clearHistoryOnReload(): Promise<void> {
+  return clearHistoryItem.setValue(true);
+}
 
 export interface Notice {
   message: string;
@@ -48,8 +61,17 @@ export interface RelayApp {
 
 /** Build the object graph and load plugins. The UI renders from the returned app. */
 export async function createApp(plugins: RelayPlugin[]): Promise<RelayApp> {
+  const clearing = await clearHistoryItem.getValue();
   // First, so a second window's panel stops before plugins start.
-  const conversations = await openConversationStorage();
+  const conversations = await openConversationStorage(clearing);
+  const attachments = new Attachments(chromeStore("attachments"));
+  if (clearing) {
+    await historyItem.removeValue();
+    await conversationItem.removeValue();
+    await attachments.clear();
+    // Last, so a start cut short clears again.
+    await clearHistoryItem.removeValue();
+  }
   const store = createStore();
   await store.set(settingsAtom.sync);
   await store.set(historyAtom.sync);
@@ -72,7 +94,6 @@ export async function createApp(plugins: RelayPlugin[]): Promise<RelayApp> {
   registry.install(coreExtension(questions));
   const codemode = codemodeExtension();
 
-  const attachments = new Attachments(chromeStore("attachments"));
   const host = new PluginHost({
     attachments,
     registry,

@@ -52,7 +52,9 @@ pnpm build        # builds the extension into apps/extension/dist
 4. The clock button in the header lists past conversations: search, reopen, rename or delete
    them. Each is named after its first message, or by the **Title model** chosen in settings,
    which offers only models your connected providers serve. Deleting removes a conversation
-   from the list; pi-durable cannot delete it, so its messages stay in the local database.
+   from the list; pi-durable cannot delete a single conversation, so its messages stay in the
+   local database. **Clear all history** in settings deletes them all: the side panel reloads
+   and opens an empty database.
 
 | Command      | Does                                                                         |
 | ------------ | ---------------------------------------------------------------------------- |
