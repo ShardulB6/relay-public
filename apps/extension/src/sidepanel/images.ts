@@ -11,14 +11,8 @@ const DEFAULT_RESIZE: Required<ModelImageResizeOptions> = {
   jpegQuality: 0.85,
 };
 
-function toBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(reader.error ?? new Error("Could not read the image."));
-    reader.onload = () =>
-      resolve((reader.result as string).slice((reader.result as string).indexOf(",") + 1));
-    reader.readAsDataURL(blob);
-  });
+async function toBase64(blob: Blob): Promise<string> {
+  return new Uint8Array(await blob.arrayBuffer()).toBase64();
 }
 
 /** Base64 inflates by 4/3; the limit applies to what is sent, not the file. */

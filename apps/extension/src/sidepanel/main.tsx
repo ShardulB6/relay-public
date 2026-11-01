@@ -7,6 +7,7 @@ import { createRoot } from "react-dom/client";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 
 import { createApp } from "../core/app.ts";
+import { errorMessage } from "../core/errors.ts";
 import { plugins } from "../plugins/index.ts";
 import { App } from "./app.tsx";
 
@@ -27,9 +28,7 @@ try {
   root.render(
     <Alert variant="destructive" className="m-3 w-auto">
       <AlertTitle>Relay failed to start</AlertTitle>
-      <AlertDescription className="wrap-anywhere">
-        {error instanceof Error ? error.message : String(error)}
-      </AlertDescription>
+      <AlertDescription className="wrap-anywhere">{errorMessage(error)}</AlertDescription>
     </Alert>,
   );
 }

@@ -1,7 +1,8 @@
+import { errorMessage } from "../../core/errors.ts";
 import type { KeyValueStore } from "../../core/storage.ts";
 import {
+  RUN_AT,
   SCRIPTS_KEY,
-  type RunAt,
   type SaveUserScript,
   type UserScript,
   type UserScriptDetails,
@@ -11,7 +12,6 @@ import {
 } from "./protocol.ts";
 
 const ID_PREFIX = "relay-userscript-";
-const RUN_AT: readonly RunAt[] = ["document_start", "document_end", "document_idle"];
 
 type Registration = chrome.userScripts.RegisteredUserScript;
 
@@ -68,10 +68,6 @@ export function permissionOrigins(matches: readonly string[]): string[] {
       ),
     ),
   ];
-}
-
-export function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function registration(script: UserScript): Registration {
@@ -176,7 +172,7 @@ export class UserScriptManager {
         await this.#apply(script, registered.scripts);
         this.#errors.delete(script.id);
       } catch (error) {
-        this.#errors.set(script.id, errorText(error));
+        this.#errors.set(script.id, errorMessage(error));
       }
     }
     return this.#registered();

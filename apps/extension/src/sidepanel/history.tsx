@@ -1,14 +1,16 @@
 import type { ConversationId } from "@earendil-works/pi-durable";
 import { useAtomValue } from "jotai";
 import { CheckIcon, PencilIcon, Trash2Icon, XIcon } from "lucide-react";
-import { useState, type KeyboardEvent, type ReactNode } from "react";
+import { useState, type KeyboardEvent } from "react";
 
+import { IconButton } from "@/components/icon-button";
+import { PageHeader } from "@/components/page-header";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 
 import type { RelayApp } from "../core/app.ts";
+import { errorMessage } from "../core/errors.ts";
 import { historyAtom, type HistoryEntry } from "../core/history.ts";
 
 const relative = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
@@ -21,37 +23,6 @@ function when(time: number): string {
   if (seconds > -86_400) return relative.format(Math.round(seconds / 3600), "hour");
   if (seconds > -7 * 86_400) return relative.format(Math.round(seconds / 86_400), "day");
   return new Date(time).toLocaleDateString();
-}
-
-function IconAction({
-  label,
-  onClick,
-  children,
-  className,
-}: {
-  label: string;
-  onClick: () => void;
-  children: ReactNode;
-  className?: string;
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label={label}
-            className={className}
-            onClick={onClick}
-          />
-        }
-      >
-        {children}
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
-  );
 }
 
 function Row({
@@ -90,12 +61,12 @@ function Row({
           onFocus={(event) => event.target.select()}
           className="h-7"
         />
-        <IconAction label="Save" onClick={save}>
+        <IconButton label="Save" onClick={save}>
           <CheckIcon />
-        </IconAction>
-        <IconAction label="Cancel" onClick={() => setMode("view")}>
+        </IconButton>
+        <IconButton label="Cancel" onClick={() => setMode("view")}>
           <XIcon />
-        </IconAction>
+        </IconButton>
       </li>
     );
   }
@@ -131,7 +102,7 @@ function Row({
         <span className="text-xs text-muted-foreground">{when(entry.updatedAt)}</span>
       </button>
       <div className="flex opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100">
-        <IconAction
+        <IconButton
           label="Rename"
           onClick={() => {
             setTitle(entry.title);
@@ -139,14 +110,14 @@ function Row({
           }}
         >
           <PencilIcon />
-        </IconAction>
-        <IconAction
+        </IconButton>
+        <IconButton
           label="Delete"
           className="hover:text-destructive"
           onClick={() => setMode("delete")}
         >
           <Trash2Icon />
-        </IconAction>
+        </IconButton>
       </div>
     </li>
   );
@@ -162,18 +133,12 @@ export function HistoryView({ app, close }: { app: RelayApp; close: () => void }
     ? entries.filter((entry) => entry.title.toLocaleLowerCase().includes(needle))
     : entries;
 
-  const report = (error: unknown) =>
-    ui.notify(error instanceof Error ? error.message : String(error), "error");
+  const report = (error: unknown) => ui.notify(errorMessage(error), "error");
   const open = (id: ConversationId) => session.open(id).then(close, report);
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex items-center justify-between gap-2 border-b p-2 pl-3">
-        <h1 className="font-heading text-base font-medium">Conversations</h1>
-        <Button variant="outline" size="sm" onClick={close}>
-          Done
-        </Button>
-      </header>
+      <PageHeader title="Conversations" close={close} />
       <div className="flex min-h-0 flex-1 flex-col gap-3 p-3">
         <Input
           type="search"

@@ -7,6 +7,7 @@ import {
 } from "@earendil-works/pi-durable";
 
 import type { Attachments } from "./attachments.ts";
+import { errorMessage } from "./errors.ts";
 import type {
   RelayAPI,
   RelayEventHandler,
@@ -117,7 +118,7 @@ export class PluginHost {
         }),
       );
     } catch (error) {
-      loaded.error = error instanceof Error ? error.message : String(error);
+      loaded.error = errorMessage(error);
       console.error(`[relay] plugin "${plugin.id}" failed to load`, error);
       return;
     }
@@ -140,7 +141,7 @@ export class PluginHost {
       } catch (error) {
         console.error(`[relay] plugin "${handler.pluginId}" failed handling ${name}`, error);
         this.#deps.notify(
-          `Plugin "${handler.pluginId}" failed handling ${name}: ${error instanceof Error ? error.message : String(error)}`,
+          `Plugin "${handler.pluginId}" failed handling ${name}: ${errorMessage(error)}`,
         );
       }
     }

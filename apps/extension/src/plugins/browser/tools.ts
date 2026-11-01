@@ -6,9 +6,10 @@ import type {
   Page,
 } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
 
+import { errorMessage } from "../../core/errors.ts";
 import { defineTool, type Tool } from "../../core/plugin.ts";
 import { resolveRefInPage, snapshotInPage } from "./snapshot.ts";
-import { tabInfo, type AttachedTabs } from "./tabs.ts";
+import { tabInfo, TabSchema, type AttachedTabs } from "./tabs.ts";
 
 /** A browser tool: only scripts call it, so one script can chain many browser actions. */
 function scriptTool<P extends TSchema>(tool: Omit<Tool<P>, "callers">): Tool<P> {
@@ -52,13 +53,6 @@ const Image = Type.Object({
   data: Type.String(),
   mimeType: Type.String(),
 });
-const Tab = Type.Object({
-  id: Type.Integer(),
-  title: Type.String(),
-  url: Type.String(),
-  active: Type.Boolean(),
-  windowId: Type.Integer(),
-});
 
 async function activeTabId(): Promise<number> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -73,7 +67,7 @@ async function attach(tabs: AttachedTabs, tabId: number, signal: AbortSignal): P
     return await tabs.page(tabId, signal);
   } catch (error) {
     if (signal.aborted) throw error;
-    const message = error instanceof Error ? error.message : String(error);
+    const message = errorMessage(error);
     if (/different extension/i.test(message)) {
       throw new Error(
         `Tab ${tabId} cannot be controlled: another extension (often a password manager or autofill tool) has its own popup open inside the page, which Chrome does not allow Relay to control. Do not retry: ask the user to close that popup or turn the extension off for this site.`,
@@ -272,14 +266,14 @@ export function browserTools(tabs: AttachedTabs): Tool[] {
       name: "tabs_list",
       description: "All open tabs.",
       parameters: Type.Object({}),
-      returns: Type.Array(Tab),
+      returns: Type.Array(TabSchema),
       execute: async () => (await chrome.tabs.query({})).map(tabInfo),
     }),
     scriptTool({
       name: "tabs_current",
       description: "The tab the user is looking at.",
       parameters: Type.Object({}),
-      returns: Type.Union([Tab, Type.Null()]),
+      returns: Type.Union([TabSchema, Type.Null()]),
       execute: async () => {
         const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
         return tab ? tabInfo(tab) : null;
@@ -289,7 +283,7 @@ export function browserTools(tabs: AttachedTabs): Tool[] {
       name: "tabs_open",
       description: "Open a new tab and wait for it to load. Pass its id as tabId to page tools.",
       parameters: Type.Object({ url: Type.String(), active: Type.Optional(Type.Boolean()) }),
-      returns: Tab,
+      returns: TabSchema,
       execute: async ({ url, active = true }, { signal }) => {
         assertControllable(url);
         // A blank tab Chrome opens has an opaque origin, unlike one a Relay page opens, so this

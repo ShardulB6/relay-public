@@ -1,3 +1,4 @@
+import { Type, type Static } from "@earendil-works/pi-ai";
 import {
   connect,
   ExtensionTransport,
@@ -5,13 +6,15 @@ import {
   type Page,
 } from "puppeteer-core/lib/puppeteer/puppeteer-core-browser.js";
 
-export interface TabInfo {
-  id: number;
-  title: string;
-  url: string;
-  active: boolean;
-  windowId: number;
-}
+export const TabSchema = Type.Object({
+  id: Type.Integer(),
+  title: Type.String(),
+  url: Type.String(),
+  active: Type.Boolean(),
+  windowId: Type.Integer(),
+});
+
+export type TabInfo = Static<typeof TabSchema>;
 
 export function tabInfo(tab: chrome.tabs.Tab): TabInfo {
   return {

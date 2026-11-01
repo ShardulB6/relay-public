@@ -1,9 +1,9 @@
-import type { Api, Model, ModelThinkingLevel } from "@earendil-works/pi-ai";
-import type { AuthCheck, AuthEvent, AuthPrompt, AuthType } from "@earendil-works/pi-ai";
+import type { Api, AuthCheck, AuthEvent, AuthPrompt, AuthType, Model } from "@earendil-works/pi-ai";
 import { useAtomValue, useSetAtom } from "jotai";
-import { ChevronLeftIcon, SettingsIcon } from "lucide-react";
+import { SettingsIcon } from "lucide-react";
 import { Component, useState, type ReactNode, type SubmitEvent } from "react";
 
+import { PageHeader } from "@/components/page-header";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -38,17 +38,16 @@ import {
   SelectContent,
   SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
 
 import type { RelayApp } from "../core/app.ts";
+import { errorMessage } from "../core/errors.ts";
 import type { RelayPlugin, SettingsPage } from "../core/plugin.ts";
 import { settingsAtom, updateSettingsAtom } from "../core/settings.ts";
-
-const THINKING_LEVELS: ModelThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
+import { findModel, modelKey, ModelOptions, parseModelKey } from "./models.tsx";
 
 /** A provider login in progress, shown as a dialog. */
 export interface LoginDialogState {
@@ -214,7 +213,7 @@ class PageBoundary extends Component<{ pluginId: string; children: ReactNode }> 
   state: { error?: string } = {};
 
   static getDerivedStateFromError(error: unknown) {
-    return { error: error instanceof Error ? error.message : String(error) };
+    return { error: errorMessage(error) };
   }
 
   componentDidCatch(error: unknown) {
@@ -249,17 +248,7 @@ function PluginSettingsView({
 }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex items-center justify-between gap-2 border-b p-2">
-        <div className="flex min-w-0 items-center gap-1">
-          <Button variant="ghost" size="icon-sm" aria-label="Back to settings" onClick={back}>
-            <ChevronLeftIcon />
-          </Button>
-          <h1 className="truncate font-heading text-base font-medium">{plugin.name}</h1>
-        </div>
-        <Button variant="outline" size="sm" onClick={close}>
-          Done
-        </Button>
-      </header>
+      <PageHeader title={plugin.name} close={close} back={back} />
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto p-3">
         <PageBoundary pluginId={plugin.id}>
           <PluginPageContent render={render} />
@@ -276,13 +265,8 @@ const FIRST_MESSAGE = "";
 function TitleModelField({ app, available }: { app: RelayApp; available: readonly Model<Api>[] }) {
   const selected = useAtomValue(settingsAtom).titleModel;
   const updateSettings = useSetAtom(updateSettingsAtom);
-  const providers = new Map<string, Model<Api>[]>();
-  for (const model of available) {
-    providers.set(model.provider, [...(providers.get(model.provider) ?? []), model]);
-  }
-  const key = (model: { provider: string; id: string }) => `${model.provider}/${model.id}`;
   // A model whose credential was removed is not offered, and not used.
-  const current = selected && available.find((model) => key(model) === key(selected));
+  const current = findModel(available, selected);
 
   return (
     <Field>
@@ -294,14 +278,8 @@ function TitleModelField({ app, available }: { app: RelayApp; available: readonl
         </FieldDescription>
       </FieldContent>
       <Select
-        value={current ? key(current) : FIRST_MESSAGE}
-        onValueChange={(value) => {
-          // Model ids may contain slashes; the provider id never does.
-          const [provider, ...rest] = (value ?? "").split("/");
-          void updateSettings({
-            titleModel: provider && rest.length > 0 ? { provider, id: rest.join("/") } : undefined,
-          });
-        }}
+        value={current ? modelKey(current) : FIRST_MESSAGE}
+        onValueChange={(value) => void updateSettings({ titleModel: parseModelKey(value) })}
       >
         <SelectTrigger id="title-model" className="w-full min-w-0">
           <SelectValue className="min-w-0 truncate">
@@ -312,16 +290,7 @@ function TitleModelField({ app, available }: { app: RelayApp; available: readonl
           <SelectGroup>
             <SelectItem value={FIRST_MESSAGE}>None (use the first message)</SelectItem>
           </SelectGroup>
-          {[...providers].map(([providerId, list]) => (
-            <SelectGroup key={providerId}>
-              <SelectLabel>{app.models.getProvider(providerId)?.name ?? providerId}</SelectLabel>
-              {list.map((model) => (
-                <SelectItem key={key(model)} value={key(model)}>
-                  {model.name}
-                </SelectItem>
-              ))}
-            </SelectGroup>
-          ))}
+          <ModelOptions app={app} models={available} />
         </SelectContent>
       </Select>
     </Field>
@@ -366,12 +335,7 @@ export function SettingsView({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex items-center justify-between gap-2 border-b p-2 pl-3">
-        <h1 className="font-heading text-base font-medium">Settings</h1>
-        <Button variant="outline" size="sm" onClick={actions.close}>
-          Done
-        </Button>
-      </header>
+      <PageHeader title="Settings" close={actions.close} />
 
       <div className="flex min-h-0 flex-1 flex-col gap-8 overflow-y-auto p-3">
         <FieldSet>
@@ -427,35 +391,6 @@ export function SettingsView({
               );
             })}
           </ItemGroup>
-        </FieldSet>
-
-        <FieldSet>
-          <FieldLegend>Reasoning</FieldLegend>
-          <Field orientation="horizontal">
-            <FieldContent>
-              <FieldLabel htmlFor="thinking-level">Thinking level</FieldLabel>
-              <FieldDescription>For models that support it.</FieldDescription>
-            </FieldContent>
-            <Select
-              value={value.thinkingLevel}
-              onValueChange={(thinkingLevel) =>
-                thinkingLevel && void updateSettings({ thinkingLevel })
-              }
-            >
-              <SelectTrigger id="thinking-level" className="w-28">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {THINKING_LEVELS.map((level) => (
-                    <SelectItem key={level} value={level}>
-                      {level}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
-          </Field>
         </FieldSet>
 
         <FieldSet>

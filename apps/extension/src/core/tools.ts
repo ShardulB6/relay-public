@@ -9,7 +9,8 @@ import {
 import type { Attachments } from "./attachments.ts";
 import type { Tool } from "./plugin.ts";
 
-const NEVER_ABORTED = new AbortController().signal;
+/** For tools pi runs without an abort signal. */
+export const NEVER_ABORTED = new AbortController().signal;
 
 function isImage(value: unknown): value is ImageContent {
   return (value as ImageContent | null | undefined)?.type === "image";

@@ -2,6 +2,7 @@ import { Type, type Static } from "@earendil-works/pi-ai";
 import { defineTool, type ConversationId, type ToolRegistration } from "@earendil-works/pi-durable";
 
 import { Emitter } from "./events.ts";
+import { NEVER_ABORTED } from "./tools.ts";
 
 export const ASK_USER_TOOL = "ask_user";
 
@@ -119,8 +120,6 @@ export function describeAnswers({ answers, dismissed }: AskUserDetails): string 
   );
   return `The user answered:\n${lines.join("\n")}`;
 }
-
-const NEVER_ABORTED = new AbortController().signal;
 
 /**
  * Ask the user and wait for the answer. Replay-safe, so a question the panel closed on is asked

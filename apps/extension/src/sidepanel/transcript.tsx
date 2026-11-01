@@ -316,12 +316,13 @@ function userView(entry: EntryRecord, message: UserMessage): ReactNode {
       <UserView text={data.text} images={images(message.content)} documents={data.documents} />
     );
   }
-  const content = message.content;
-  const plain =
-    typeof content === "string"
-      ? content
-      : content.flatMap((block) => (block.type === "text" ? [block.text] : [])).join("\n");
-  return <UserView text={plain} images={images(content)} />;
+  const { content } = message;
+  return (
+    <UserView
+      text={typeof content === "string" ? content : text(content)}
+      images={images(content)}
+    />
+  );
 }
 
 function Notice({ icon, children }: { icon?: ReactNode; children: ReactNode }) {

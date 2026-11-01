@@ -35,6 +35,7 @@ import {
 } from "react";
 import { toast } from "sonner";
 
+import { IconButton } from "@/components/icon-button";
 import { Button } from "@/components/ui/button";
 import {
   Empty,
@@ -64,11 +65,13 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/comp
 import { cn } from "@/lib/utils";
 
 import type { RelayApp } from "../core/app.ts";
+import { errorMessage } from "../core/errors.ts";
 import {
   acceptsImages,
   documentBudget,
   documentLength,
   DOCUMENTS_TOO_LONG,
+  IMAGES_UNSUPPORTED,
   preferredModel,
   type AttachedDocument,
 } from "../core/session.ts";
@@ -76,6 +79,7 @@ import { settingsAtom, updateSettingsAtom } from "../core/settings.ts";
 import { documentFiles, PDF_TYPE, prepareDocument } from "./documents.ts";
 import { HistoryView } from "./history.tsx";
 import { IMAGE_TYPES, imageFiles, prepareImage } from "./images.ts";
+import { findModel, modelKey, ModelOptions, parseModelKey } from "./models.tsx";
 import { QuestionPanel, useQuestionFlow } from "./questions.tsx";
 import { LoginDialog, SettingsView, type LoginDialogState } from "./settings.tsx";
 import { Transcript } from "./transcript.tsx";
@@ -131,48 +135,20 @@ function Header({
   return (
     <header className="flex items-center gap-1 border-b p-2 pl-3">
       <span className="mr-auto font-heading font-semibold">Relay</span>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="Conversations"
-              onClick={openHistory}
-            />
-          }
-        >
-          <RotateCwClockIcon />
-        </TooltipTrigger>
-        <TooltipContent side="bottom">Conversations</TooltipContent>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label="New conversation"
-              onClick={() => void app.session.reset()}
-            />
-          }
-        >
-          <SquarePenIcon />
-        </TooltipTrigger>
-        <TooltipContent side="bottom">New conversation</TooltipContent>
-      </Tooltip>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button variant="ghost" size="icon-sm" aria-label="Settings" onClick={openSettings} />
-          }
-        >
-          <SettingsIcon />
-        </TooltipTrigger>
-        <TooltipContent side="bottom" align="end">
-          Settings
-        </TooltipContent>
-      </Tooltip>
+      <IconButton label="Conversations" size="icon-sm" side="bottom" onClick={openHistory}>
+        <RotateCwClockIcon />
+      </IconButton>
+      <IconButton
+        label="New conversation"
+        size="icon-sm"
+        side="bottom"
+        onClick={() => void app.session.reset()}
+      >
+        <SquarePenIcon />
+      </IconButton>
+      <IconButton label="Settings" size="icon-sm" side="bottom" align="end" onClick={openSettings}>
+        <SettingsIcon />
+      </IconButton>
     </header>
   );
 }
@@ -183,21 +159,14 @@ const TOOLBAR_SELECT =
 
 /** The model for the next message, grouped by the provider serving it. */
 function ModelPicker({ app, available }: { app: RelayApp; available: readonly Model<Api>[] }) {
-  const selected = useAtomValue(settingsAtom).model;
-  const providers = new Map<string, Model<Api>[]>();
-  for (const model of available) {
-    providers.set(model.provider, [...(providers.get(model.provider) ?? []), model]);
-  }
-  const key = (model: { provider: string; id: string }) => `${model.provider}/${model.id}`;
-  const current = selected && available.find((model) => key(model) === key(selected));
+  const current = findModel(available, useAtomValue(settingsAtom).model);
 
   return (
     <Select
-      value={current ? key(current) : null}
+      value={current ? modelKey(current) : null}
       onValueChange={(value) => {
-        // Model ids may contain slashes; the provider id never does.
-        const [provider, ...rest] = (value ?? "").split("/");
-        if (provider && rest.length > 0) void app.session.setModel(provider, rest.join("/"));
+        const model = parseModelKey(value);
+        if (model) void app.session.setModel(model.provider, model.id);
       }}
     >
       <SelectTrigger
@@ -215,16 +184,7 @@ function ModelPicker({ app, available }: { app: RelayApp; available: readonly Mo
         </SelectValue>
       </SelectTrigger>
       <SelectContent side="top" align="start" alignItemWithTrigger={false} className="max-h-80">
-        {[...providers].map(([providerId, list]) => (
-          <SelectGroup key={providerId}>
-            <SelectLabel>{app.models.getProvider(providerId)?.name ?? providerId}</SelectLabel>
-            {list.map((model) => (
-              <SelectItem key={key(model)} value={key(model)}>
-                {model.name}
-              </SelectItem>
-            ))}
-          </SelectGroup>
-        ))}
+        <ModelOptions app={app} models={available} />
       </SelectContent>
     </Select>
   );
@@ -370,9 +330,7 @@ function Attachments({
         ))}
       </div>
       {images.length > 0 && !supportsImages ? (
-        <p className="text-xs font-normal text-destructive">
-          The selected model does not accept images. Remove them or pick another model.
-        </p>
+        <p className="text-xs font-normal text-destructive">{IMAGES_UNSUPPORTED}</p>
       ) : null}
       {!documentsFit ? (
         <p className="text-xs font-normal text-destructive">{DOCUMENTS_TOO_LONG}</p>
@@ -435,7 +393,7 @@ function Composer({
             added = { images: [await prepareImage(file, session.model)] };
           }
         } catch (error) {
-          ui.notify(error instanceof Error ? error.message : String(error), "error");
+          ui.notify(errorMessage(error), "error");
         }
         setAttached((current) => ({
           images: [...current.images, ...(added.images ?? [])],
@@ -740,7 +698,7 @@ export function App({ app }: { app: RelayApp }) {
         if (abort.signal.aborted) return;
         update({
           prompt: undefined,
-          error: error instanceof Error ? error.message : String(error),
+          error: errorMessage(error),
         });
       }
     },

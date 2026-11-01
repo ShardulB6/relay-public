@@ -1,6 +1,7 @@
 /// <reference lib="webworker" />
 import sqlite3InitModule from "@sqlite.org/sqlite-wasm";
 
+import { errorMessage } from "../errors.ts";
 import { createSqliteHandler } from "./sqlite-handler.ts";
 import type { SqliteRequest, SqliteResponse } from "./sqlite-protocol.ts";
 
@@ -20,7 +21,7 @@ self.onmessage = async ({ data }: MessageEvent<SqliteRequest>) => {
     response = {
       id: data.id,
       ok: false,
-      error: error instanceof Error ? error.message : String(error),
+      error: errorMessage(error),
     };
   }
   self.postMessage(response);

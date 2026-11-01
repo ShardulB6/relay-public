@@ -27,6 +27,7 @@ import { storage } from "@wxt-dev/storage";
 import type { Store } from "jotai";
 
 import type { Attachments } from "./attachments.ts";
+import { errorMessage } from "./errors.ts";
 import { Emitter } from "./events.ts";
 import { fallbackTitle, generateTitle, historyAtom } from "./history.ts";
 import type { PluginHost } from "./host.ts";
@@ -58,7 +59,7 @@ const PREFERRED_MODELS: Record<string, string> = {
   openai: "gpt-6.1-sol",
 };
 
-const IMAGES_UNSUPPORTED =
+export const IMAGES_UNSUPPORTED =
   "The selected model does not accept images. Remove them or pick another model.";
 
 export const DOCUMENTS_TOO_LONG =
@@ -315,7 +316,7 @@ export class AgentSession {
       );
       await this.#record(conversation.id, text.trim() || stored[0]?.name || "");
     } catch (error) {
-      this.error = error instanceof Error ? error.message : String(error);
+      this.error = errorMessage(error);
     } finally {
       this.onChange.emit();
     }

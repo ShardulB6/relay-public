@@ -3,6 +3,12 @@ import { Type, type TSchema } from "@earendil-works/pi-ai";
 import { definePlugin, defineTool, type Tool } from "../../core/plugin.ts";
 import { userscripts } from "./client.ts";
 import { USERSCRIPTS_PROMPT } from "./prompt.ts";
+import {
+  SaveUserScriptSchema,
+  UserScriptDetailsSchema,
+  UserScriptsStatusSchema,
+  UserScriptSummarySchema,
+} from "./schemas.ts";
 import { UserScriptsSettings } from "./settings.tsx";
 
 /** Userscript tools are called from scripts, next to the browser tools that inspect the page. */
@@ -10,27 +16,6 @@ function scriptTool<P extends TSchema>(tool: Omit<Tool<P>, "callers">): Tool<P> 
   return defineTool({ ...tool, callers: ["scripts"] });
 }
 
-const RunAt = Type.Union(
-  [Type.Literal("document_start"), Type.Literal("document_end"), Type.Literal("document_idle")],
-  { description: "When the script runs on a page load. Default: document_idle." },
-);
-const Summary = Type.Object({
-  id: Type.String(),
-  name: Type.String(),
-  description: Type.String(),
-  matches: Type.Array(Type.String()),
-  runAt: RunAt,
-  enabled: Type.Boolean(),
-  createdAt: Type.Number(),
-  updatedAt: Type.Number(),
-  registered: Type.Boolean({ description: "Whether Chrome runs it on matching page loads." }),
-  siteAccess: Type.Boolean({
-    description:
-      "Whether the user let Relay run scripts on its sites, on the userscripts settings page.",
-  }),
-  error: Type.Optional(Type.String()),
-});
-const Details = Type.Object({ ...Summary.properties, code: Type.String() });
 const Id = Type.Object({ id: Type.String() });
 
 export default definePlugin({
@@ -43,41 +28,28 @@ export default definePlugin({
         name: "userscripts_list",
         description: "Every saved userscript, without its code.",
         parameters: Type.Object({}),
-        returns: Type.Array(Summary),
+        returns: Type.Array(UserScriptSummarySchema),
         execute: () => userscripts.list(),
       }),
       scriptTool({
         name: "userscripts_get",
         description: "One userscript, with its code.",
         parameters: Id,
-        returns: Details,
+        returns: UserScriptDetailsSchema,
         execute: ({ id }) => userscripts.get(id),
       }),
       scriptTool({
         name: "userscripts_save",
         description: "Create a userscript, or update the one with the given id.",
-        parameters: Type.Object({
-          id: Type.Optional(Type.String({ description: "Omit to create a script." })),
-          name: Type.String(),
-          description: Type.Optional(Type.String()),
-          code: Type.String({ description: "Plain browser JavaScript." }),
-          matches: Type.Optional(
-            Type.Array(Type.String(), {
-              description:
-                "HTTP(S) match patterns. Default for a new script: the active tab's site.",
-            }),
-          ),
-          runAt: Type.Optional(RunAt),
-          enabled: Type.Optional(Type.Boolean({ description: "Default: true." })),
-        }),
-        returns: Details,
+        parameters: SaveUserScriptSchema,
+        returns: UserScriptDetailsSchema,
         execute: (script) => userscripts.save(script),
       }),
       scriptTool({
         name: "userscripts_set_enabled",
         description: "Turn a userscript on or off.",
         parameters: Type.Object({ id: Type.String(), enabled: Type.Boolean() }),
-        returns: Details,
+        returns: UserScriptDetailsSchema,
         execute: ({ id, enabled }) => userscripts.setEnabled(id, enabled),
       }),
       scriptTool({
@@ -91,7 +63,7 @@ export default definePlugin({
         name: "userscripts_status",
         description: "Whether Chrome lets Relay run userscripts.",
         parameters: Type.Object({}),
-        returns: Type.Object({ available: Type.Boolean(), error: Type.Optional(Type.String()) }),
+        returns: UserScriptsStatusSchema,
         execute: () => userscripts.status(),
       }),
     ];

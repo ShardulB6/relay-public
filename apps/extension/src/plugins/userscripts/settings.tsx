@@ -16,9 +16,10 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 
+import { errorMessage } from "../../core/errors.ts";
 import type { KeyValueStore } from "../../core/storage.ts";
 import { userscripts } from "./client.ts";
-import { errorText, permissionOrigins } from "./manager.ts";
+import { permissionOrigins } from "./manager.ts";
 import {
   SCRIPTS_KEY,
   type RunAt,
@@ -153,7 +154,7 @@ export function UserScriptsSettings({ storage }: { storage: KeyValueStore }) {
       setStatus(nextStatus);
       setError(undefined);
     } catch (cause) {
-      setError(errorText(cause));
+      setError(errorMessage(cause));
     }
   }, []);
 
@@ -176,7 +177,7 @@ export function UserScriptsSettings({ storage }: { storage: KeyValueStore }) {
       await action();
       await refresh();
     } catch (cause) {
-      setError(errorText(cause));
+      setError(errorMessage(cause));
     } finally {
       setBusy(false);
     }

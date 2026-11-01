@@ -40,8 +40,6 @@ export interface RelayApp {
   credentials: StoredCredentials;
   models: MutableModels;
   host: PluginHost;
-  /** Runs and stores conversations. */
-  harness: Harness;
   session: AgentSession;
   ui: UiBridge;
   /** Stable id of this installation; some providers want one when signing in. */
@@ -98,5 +96,5 @@ export async function createApp(plugins: RelayPlugin[]): Promise<RelayApp> {
   );
   const session = new AgentSession({ attachments, harness, host, models, questions, store });
   await session.start();
-  return { store, credentials, models, host, harness, session, ui, deviceId };
+  return { store, credentials, models, host, session, ui, deviceId };
 }

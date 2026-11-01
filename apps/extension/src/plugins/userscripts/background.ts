@@ -1,5 +1,6 @@
+import { errorMessage } from "../../core/errors.ts";
 import { defineBackgroundPlugin } from "../../core/plugin.ts";
-import { UserScriptManager, errorText } from "./manager.ts";
+import { UserScriptManager } from "./manager.ts";
 import { USERSCRIPTS_MESSAGE, type UserScriptsRequest } from "./protocol.ts";
 
 // Chrome runs registered userscripts on future visits even when Relay's side panel is closed, so
@@ -21,7 +22,7 @@ export default defineBackgroundPlugin({
       }
       manager.handle(message as UserScriptsRequest).then(
         (value) => sendResponse({ ok: true, value }),
-        (error: unknown) => sendResponse({ ok: false, error: errorText(error) }),
+        (error: unknown) => sendResponse({ ok: false, error: errorMessage(error) }),
       );
       return true;
     });
