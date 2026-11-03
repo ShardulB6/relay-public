@@ -1,5 +1,6 @@
 import type { Credential, OAuthAuth, OAuthCredential } from "@earendil-works/pi-ai";
 import { OPENAI_CODEX_MODELS } from "@earendil-works/pi-ai/providers/openai-codex.models";
+import { storage } from "@wxt-dev/storage";
 
 // "Sign in with ChatGPT" for a browser extension.
 //
@@ -18,6 +19,12 @@ const DIRECT_TOKEN_SCOPE = "chatgpt.tokens.use.direct";
 const SCOPE = `openid profile email offline_access resource.invoke ${DIRECT_TOKEN_SCOPE}`;
 // Refresh this long before the real expiry so a request never starts with a dying token.
 const EXPIRY_MARGIN_MS = 3 * 60 * 1000;
+/**
+ * The client OpenAI registered for the last sign-in. Signing in with `dynamic_agent_client`
+ * registers a new client, which the ChatGPT account lists as another "Relay" app, so later
+ * sign-ins reuse this one. It is not a secret and is kept after disconnecting.
+ */
+export const issuedClientItem = storage.defineItem<string>("local:relay:chatgptClientId");
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 function base64url(bytes: Uint8Array): string {
@@ -37,13 +44,38 @@ async function pkce(): Promise<{ verifier: string; challenge: string }> {
   return { verifier, challenge: base64url(new Uint8Array(digest)) };
 }
 
+/** An OAuth error response, with its `error` code (RFC 6749 §4.1.2.1 and §5.2). */
+export class OAuthError extends Error {
+  readonly code: string;
+
+  constructor(code: string, message: string) {
+    super(message);
+    this.code = code;
+  }
+}
+
+/** The error codes that mean OpenAI no longer accepts a client. */
+const CLIENT_REJECTED = new Set(["invalid_client", "unauthorized_client"]);
+
+/** Forget a reused client, unless another side panel has since stored a different one. */
+async function forgetClient(clientId: string): Promise<void> {
+  if ((await issuedClientItem.getValue()) === clientId) await issuedClientItem.removeValue();
+}
+
 interface AuthorizationResult {
   code: string;
   clientId: string;
 }
 
-/** Parse the redirect URL; throws when it is the callback but carries an error or bad state. */
-export function parseCallback(input: string, expectedState: string): AuthorizationResult {
+/**
+ * Parse the redirect URL; throws when it is the callback but carries an error or bad state.
+ * `requestedClientId` is the issued client the sign-in reused, if any.
+ */
+export function parseCallback(
+  input: string,
+  expectedState: string,
+  requestedClientId?: string,
+): AuthorizationResult {
   let url: URL;
   try {
     url = new URL(input.trim());
@@ -54,19 +86,24 @@ export function parseCallback(input: string, expectedState: string): Authorizati
   if (url.origin !== expected.origin || url.pathname !== expected.pathname) {
     throw new Error(`The callback URL must start with ${REDIRECT_URI}`);
   }
+  // Before the error, so a stale redirect from another sign-in cannot fail this one.
+  if (url.searchParams.get("state") !== expectedState) throw new Error("OAuth state mismatch");
   const error = url.searchParams.get("error");
-  if (error) throw new Error(`ChatGPT authorization failed: ${error}`);
+  if (error) throw new OAuthError(error, `ChatGPT authorization failed: ${error}`);
   const code = url.searchParams.get("code");
   if (!code) throw new Error("Missing authorization code");
-  if (url.searchParams.get("state") !== expectedState) throw new Error("OAuth state mismatch");
-  // Every login registers a new client; OpenAI returns the issued id in the callback.
-  const clientId = url.searchParams.get("client_id")?.trim();
+  // A new registration returns its issued id in the callback. A reused client may not repeat it.
+  const clientId = url.searchParams.get("client_id")?.trim() || requestedClientId;
   if (!clientId) throw new Error("The callback did not contain an issued client ID");
   return { code, clientId };
 }
 
 /** Resolves when any tab navigates to the OAuth redirect URL, then closes that tab. */
-function waitForRedirect(expectedState: string, signal: AbortSignal): Promise<AuthorizationResult> {
+function waitForRedirect(
+  expectedState: string,
+  requestedClientId: string | undefined,
+  signal: AbortSignal,
+): Promise<AuthorizationResult> {
   return new Promise((resolve, reject) => {
     const cleanup = () => {
       chrome.tabs.onUpdated.removeListener(onUpdated);
@@ -82,7 +119,7 @@ function waitForRedirect(expectedState: string, signal: AbortSignal): Promise<Au
       // Nothing listens on the loopback port, so the tab only shows a connection error.
       chrome.tabs.remove(tabId).catch(() => {});
       try {
-        resolve(parseCallback(change.url, expectedState));
+        resolve(parseCallback(change.url, expectedState, requestedClientId));
       } catch (error) {
         reject(error);
       }
@@ -143,9 +180,14 @@ export function chatgptOAuth(): OAuthAuth {
     });
     if (!response.ok) {
       const detail = await response.text().catch(() => "");
-      throw new Error(
-        `OpenAI OAuth token request failed (${response.status}): ${detail || response.statusText}`,
-      );
+      const message = `OpenAI OAuth token request failed (${response.status}): ${detail || response.statusText}`;
+      let code: unknown;
+      try {
+        code = (JSON.parse(detail) as { error?: unknown }).error;
+      } catch {
+        // Not a JSON error body.
+      }
+      throw typeof code === "string" ? new OAuthError(code, message) : new Error(message);
     }
     const data: unknown = await response.json();
     if (typeof data !== "object" || data === null || Array.isArray(data)) {
@@ -166,10 +208,11 @@ export function chatgptOAuth(): OAuthAuth {
       }
       const { verifier, challenge } = await pkce();
       const state = randomValue();
+      const reused = (await issuedClientItem.getValue()) ?? undefined;
 
       const url = new URL(AUTHORIZE_URL);
       url.search = new URLSearchParams({
-        client_id: DYNAMIC_CLIENT_ID,
+        client_id: reused ?? DYNAMIC_CLIENT_ID,
         agent_name_hint: AGENT_NAME_HINT,
         ext_agent_host_id: `urn:uuid:${deviceId.toLowerCase()}`,
         response_type: "code",
@@ -185,7 +228,7 @@ export function chatgptOAuth(): OAuthAuth {
       // Whichever finishes first wins: the watched redirect or a URL pasted by the user.
       const settled = new AbortController();
       const signal = AbortSignal.any([settled.signal, interaction.signal]);
-      const redirect = waitForRedirect(state, signal);
+      const redirect = waitForRedirect(state, reused, signal);
       interaction.notify({
         type: "auth_url",
         url: url.toString(),
@@ -200,13 +243,19 @@ export function chatgptOAuth(): OAuthAuth {
           placeholder: REDIRECT_URI,
           signal,
         })
-        .then((input) => parseCallback(input, state));
+        .then((input) => parseCallback(input, state, reused));
       // The loser is aborted below and must not surface as an unhandled rejection.
       redirect.catch(() => {});
       manual.catch(() => {});
 
+      // The client OpenAI accepted for this sign-in, once its callback arrives.
+      let accepted: string | undefined;
       try {
         const result = await Promise.race([redirect, manual]);
+        accepted = result.clientId;
+        // Saved before the code exchange: OpenAI has registered the client already, and a failed
+        // token request must not leave the next sign-in registering another one.
+        await issuedClientItem.setValue(accepted);
         interaction.notify({ type: "progress", message: "Exchanging the code for tokens…" });
         const token = await requestToken(
           {
@@ -219,7 +268,18 @@ export function chatgptOAuth(): OAuthAuth {
           },
           interaction.signal,
         );
-        return credentialFromToken(token, result.clientId);
+        return credentialFromToken(token, accepted);
+      } catch (error) {
+        // Forget a client OpenAI refuses, so the next sign-in registers a new one. For a client
+        // it does not know, OpenAI shows an error on its own page instead of redirecting (RFC 6749
+        // §4.1.2.1), so a sign-in cancelled before the callback is the only sign of that. Other
+        // failures, such as a network error, keep the client: forgetting it would register
+        // another app.
+        const rejected = error instanceof OAuthError && CLIENT_REJECTED.has(error.code);
+        const stuck = accepted === undefined && interaction.signal.aborted;
+        const client = accepted ?? reused;
+        if (client && (rejected || stuck)) await forgetClient(client);
+        throw error;
       } finally {
         settled.abort();
       }
