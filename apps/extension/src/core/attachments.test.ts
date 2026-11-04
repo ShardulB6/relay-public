@@ -21,14 +21,14 @@ test("a file attached again under a taken name is stored beside it, not over it"
   expect(await second?.text()).toBe("second");
 });
 
-test("saves and deletes that overlap apply in order", async () => {
+test("saves and clears that overlap apply in order", async () => {
   const attachments = new Attachments(chromeStore("attachments"));
   await Promise.all([attachments.save(id, [pdf("a.pdf")]), attachments.save(id, [pdf("b.pdf")])]);
   expect(await attachments.names(id)).toEqual(["a.pdf", "b.pdf"]);
 
-  // A delete made while a save is under way is not undone by it.
+  // A clear made while a save is under way is not undone by it.
   const saving = attachments.save(id, [pdf("c.pdf")]);
-  await Promise.all([saving, attachments.delete(id)]);
+  await Promise.all([saving, attachments.clear()]);
   expect(await attachments.names(id)).toEqual([]);
 });
 

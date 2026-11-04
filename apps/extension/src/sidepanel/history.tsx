@@ -1,11 +1,10 @@
 import type { ConversationId } from "@earendil-works/pi-durable";
 import { useAtomValue } from "jotai";
-import { CheckIcon, PencilIcon, Trash2Icon, XIcon } from "lucide-react";
+import { CheckIcon, PencilIcon, XIcon } from "lucide-react";
 import { useState, type KeyboardEvent } from "react";
 
 import { IconButton } from "@/components/icon-button";
 import { PageHeader } from "@/components/page-header";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 
@@ -30,15 +29,13 @@ function Row({
   current,
   open,
   rename,
-  remove,
 }: {
   entry: HistoryEntry;
   current: boolean;
   open: () => void;
   rename: (title: string) => void;
-  remove: () => void;
 }) {
-  const [mode, setMode] = useState<"view" | "rename" | "delete">("view");
+  const [mode, setMode] = useState<"view" | "rename">("view");
   const [title, setTitle] = useState(entry.title);
 
   if (mode === "rename") {
@@ -71,20 +68,6 @@ function Row({
     );
   }
 
-  if (mode === "delete") {
-    return (
-      <li className="flex items-center gap-2 rounded-lg bg-destructive/10 py-1.5 pr-1 pl-3">
-        <span className="min-w-0 flex-1 truncate text-sm">Delete “{entry.title}”?</span>
-        <Button variant="destructive" size="xs" onClick={remove}>
-          Delete
-        </Button>
-        <Button variant="ghost" size="xs" onClick={() => setMode("view")}>
-          Cancel
-        </Button>
-      </li>
-    );
-  }
-
   return (
     <li
       className={cn(
@@ -101,29 +84,21 @@ function Row({
         <span className="w-full truncate text-sm">{entry.title}</span>
         <span className="text-xs text-muted-foreground">{when(entry.updatedAt)}</span>
       </button>
-      <div className="flex opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100">
-        <IconButton
-          label="Rename"
-          onClick={() => {
-            setTitle(entry.title);
-            setMode("rename");
-          }}
-        >
-          <PencilIcon />
-        </IconButton>
-        <IconButton
-          label="Delete"
-          className="hover:text-destructive"
-          onClick={() => setMode("delete")}
-        >
-          <Trash2Icon />
-        </IconButton>
-      </div>
+      <IconButton
+        label="Rename"
+        className="opacity-0 transition-opacity group-focus-within/row:opacity-100 group-hover/row:opacity-100"
+        onClick={() => {
+          setTitle(entry.title);
+          setMode("rename");
+        }}
+      >
+        <PencilIcon />
+      </IconButton>
     </li>
   );
 }
 
-/** Past conversations: search, open, rename and delete them. */
+/** Past conversations: search, open and rename them. Clearing them all is in settings. */
 export function HistoryView({ app, close }: { app: RelayApp; close: () => void }) {
   const entries = useAtomValue(historyAtom);
   const [query, setQuery] = useState("");
@@ -161,7 +136,6 @@ export function HistoryView({ app, close }: { app: RelayApp; close: () => void }
                 current={entry.id === session.conversationId}
                 open={() => void open(entry.id)}
                 rename={(title) => void session.rename(entry.id, title).catch(report)}
-                remove={() => void session.delete(entry.id).catch(report)}
               />
             ))}
           </ul>

@@ -49,12 +49,11 @@ pnpm build        # builds the extension into apps/extension/dist
    send them along with your message. Large images are downscaled before sending. PDFs can be
    attached with any model: their text is read in the browser and sent with the message, so
    scanned pages, images and layout are not seen.
-4. The clock button in the header lists past conversations: search, reopen, rename or delete
-   them. Each is named after its first message, or by the **Title model** chosen in settings,
-   which offers only models your connected providers serve. Deleting removes a conversation
-   from the list; pi-durable cannot delete a single conversation, so its messages stay in the
-   local database. **Clear all history** in settings deletes them all: the side panel reloads
-   and opens an empty database.
+4. The clock button in the header lists past conversations: search, reopen or rename them.
+   Each is named after its first message, or by the **Title model** chosen in settings, which
+   offers only models your connected providers serve. pi-durable cannot delete a single
+   conversation, so they cannot be deleted one at a time. **Clear all history** in settings
+   deletes them all: the side panel reloads and opens an empty database.
 
 | Command      | Does                                                                         |
 | ------------ | ---------------------------------------------------------------------------- |

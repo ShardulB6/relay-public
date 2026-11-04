@@ -56,10 +56,6 @@ export class Attachments {
     return new File([Uint8Array.fromBase64(stored.data)], name, { type: stored.type });
   }
 
-  delete(conversationId: ConversationId): Promise<void> {
-    return this.#change(() => this.#store.delete(String(conversationId)));
-  }
-
   /** Delete the files of every conversation. */
   clear(): Promise<void> {
     return this.#change(async () => {

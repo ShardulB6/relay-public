@@ -390,7 +390,7 @@ describe("AgentSession", () => {
     });
   });
 
-  test("keeps attached documents' files for the conversation's tools until it is deleted", async () => {
+  test("keeps attached documents' files for the conversation's tools", async () => {
     const files: (File | undefined)[] = [];
     const plugin = withPlugin((relay) =>
       relay.registerTool(
@@ -404,17 +404,13 @@ describe("AgentSession", () => {
         }),
       ),
     );
-    const { session, respond, send } = await setup([plugin]);
+    const { respond, send } = await setup([plugin]);
     respond([fauxToolCall("read_file", {}), { stopReason: "toolUse" }], [fauxText("read")]);
 
     await send("Upload my CV", [], [{ name: "cv.pdf", pages: 1, text: "CV", file: pdf("cv.pdf") }]);
     expect(files[0]?.name).toBe("cv.pdf");
     expect(files[0]?.type).toBe("application/pdf");
     expect(await files[0]?.text()).toBe("%PDF");
-
-    const id = session.conversationId;
-    await session.delete(id);
-    expect(await attachments.names(id)).toEqual([]);
   });
 
   test("refuses documents that together are too long for the model", async () => {
@@ -736,7 +732,7 @@ describe("PluginHost", () => {
       expect(store.get(historyAtom)[0]?.title).toBe("Plan a trip to Lisbon");
     });
 
-    test("renames and deletes conversations; deleting the open one starts another", async () => {
+    test("renames the given conversation, ignoring a blank title", async () => {
       const { session, store, respond, send } = await setup();
       respond([fauxText("ok")], [fauxText("ok")]);
       await send("First");
@@ -747,15 +743,10 @@ describe("PluginHost", () => {
 
       await session.rename(first, "  Renamed  ");
       await session.rename(first, "   ");
-      expect(store.get(historyAtom).find((entry) => entry.id === first)?.title).toBe("Renamed");
-
-      await session.delete(first);
-      expect(store.get(historyAtom).map((entry) => entry.id)).toEqual([second]);
-      expect(session.conversationId).toBe(second);
-
-      await session.delete(second);
-      expect(store.get(historyAtom)).toEqual([]);
-      expect(session.conversationId).not.toBe(second);
+      const title = (id: ConversationId) =>
+        store.get(historyAtom).find((entry) => entry.id === id)?.title;
+      expect(title(first)).toBe("Renamed");
+      expect(title(second)).toBe("Second");
     });
 
     test("overlapping opens show the last one, never one's transcript under another's id", async () => {
@@ -782,33 +773,6 @@ describe("PluginHost", () => {
       expect(mismatches).toEqual([]);
       expect(session.conversationId).toBe(b);
       expect(shownText()).toBe("B");
-    });
-
-    test("deleting a conversation while its message is being stored keeps it deleted", async () => {
-      const storage = new MemoryStorage();
-      const { session, store, respond, send } = await setup([], storage);
-      respond([fauxText("ok")], [fauxText("ok")]);
-      await send("First");
-      const id = session.conversationId;
-
-      // Hold the next commit until the conversation has been deleted.
-      const commit = storage.commit.bind(storage);
-      const held = Promise.withResolvers<void>();
-      let holding = true;
-      storage.commit = async (...args) => {
-        if (holding) {
-          holding = false;
-          await held.promise;
-        }
-        return commit(...args);
-      };
-      const pending = session.prompt("Second");
-      await vi.waitFor(() => expect(holding).toBe(false));
-      const deleted = session.delete(id);
-      held.resolve();
-      await Promise.all([pending, deleted]);
-
-      expect(store.get(historyAtom).some((entry) => entry.id === id)).toBe(false);
     });
   });
 });

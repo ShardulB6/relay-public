@@ -197,8 +197,6 @@ export class AgentSession {
   #events?: AgentEventStream;
   /** Counts calls to `#show`; when they overlap, only the latest is shown. */
   #shows = 0;
-  /** Deleted from the history; a message still being stored must not add them back. */
-  #deleted = new Set<ConversationId>();
   /** The running run's first input, and the entry it was placed as once that is looked up. */
   #run?: { input: SubmissionId; entry?: EntryId; ended?: boolean };
   #deps: SessionDependencies;
@@ -296,8 +294,6 @@ export class AgentSession {
         conversation.id,
         documents.map((document) => document.file),
       );
-      // Deleted while they were being stored: nothing else would remove them.
-      if (this.#deleted.has(conversation.id)) await this.#deps.attachments.delete(conversation.id);
       if (!current()) return;
       const stored = documents.map((document, i) => ({ ...document, name: names[i]! }));
       await conversation.submit(
@@ -354,19 +350,6 @@ export class AgentSession {
     await this.#deps.store.set(historyAtom, (entries) =>
       entries.map((entry) => (entry.id === id ? { ...entry, title: trimmed } : entry)),
     );
-  }
-
-  /**
-   * Remove a conversation from the history, and start a new one if it is the one shown.
-   * pi-durable cannot delete a conversation, so its messages stay in storage.
-   */
-  async delete(id: ConversationId): Promise<void> {
-    this.#deleted.add(id);
-    await this.#deps.store.set(historyAtom, (entries) =>
-      entries.filter((entry) => entry.id !== id),
-    );
-    await this.#deps.attachments.delete(id);
-    if (id === this.conversationId) await this.reset();
   }
 
   async setModel(provider: string, id: string): Promise<void> {
@@ -511,7 +494,6 @@ export class AgentSession {
   /** Move the conversation to the top of the history, adding and naming it on its first message. */
   async #record(id: ConversationId, text: string) {
     const { store } = this.#deps;
-    if (this.#deleted.has(id)) return;
     const isNew = !store.get(historyAtom).some((entry) => entry.id === id);
     const title = fallbackTitle(text);
     await store.set(historyAtom, (entries) => {
