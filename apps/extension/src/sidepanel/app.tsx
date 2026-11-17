@@ -350,7 +350,7 @@ function Composer({
   app: RelayApp;
   available: readonly Model<Api>[];
   draft: string;
-  setDraft: (draft: string) => void;
+  setDraft: Dispatch<SetStateAction<string>>;
   attached: Attached;
   setAttached: Dispatch<SetStateAction<Attached>>;
 }) {
@@ -430,7 +430,14 @@ function Composer({
     if (!canSend) return;
     setDraft("");
     setAttached(NOTHING_ATTACHED);
-    await session.prompt(text, images, documents);
+    if (await session.prompt(text, images, documents)) return;
+    // Not sent: give the message back, around anything written or attached since.
+    setDraft((current) => current || text);
+    setAttached((current) => ({
+      ...current,
+      images: [...images, ...current.images],
+      documents: [...documents, ...current.documents],
+    }));
   };
 
   const onKeyDown = (event: KeyboardEvent) => {
@@ -574,7 +581,7 @@ function Chat({
   openHistory: () => void;
   openSettings: () => void;
   draft: string;
-  setDraft: (draft: string) => void;
+  setDraft: Dispatch<SetStateAction<string>>;
   attached: Attached;
   setAttached: Dispatch<SetStateAction<Attached>>;
 }) {

@@ -144,17 +144,21 @@ const NAME_ESCAPES: Record<string, string> = {
   '"': "&quot;",
 };
 
+/** `text` as it is, except for anything that would close the `tag` it is wrapped in early. */
+function contained(text: string, tag: string): string {
+  return text.replace(new RegExp(`</(${tag})`, "gi"), "<\\/$1");
+}
+
 /** A document wrapped in tags, so its text cannot pass for anything outside it. */
 function documentBlock({ name, text }: AttachedDocument): string {
   const escapedName = name.replace(/[&<>"]/g, (char) => NAME_ESCAPES[char]!);
-  // The text stays as it is, except for anything that would close its tag early.
-  const body = text.replace(/<\/(document)/gi, "<\\/$1");
-  return `<document name="${escapedName}">\n${body}\n</document>`;
+  return `<document name="${escapedName}">\n${contained(text, "document")}\n</document>`;
 }
 
 /**
  * The user message the model sees: ambient context, the attached documents' text, then what the
- * user typed, and the images.
+ * user typed, and the images. Ambient context holds text from web pages (the active tab's title),
+ * so like a document it cannot close its tag and pass for what the user typed.
  */
 export function userContent(
   ambient: readonly string[],
@@ -163,7 +167,7 @@ export function userContent(
   documents: readonly AttachedDocument[] = [],
 ): UserMessage["content"] {
   const parts = [
-    `<context>\n${ambient.join("\n")}\n</context>`,
+    `<context>\n${contained(ambient.join("\n"), "context")}\n</context>`,
     ...documents.map(documentBlock),
     text,
   ];
@@ -263,14 +267,15 @@ export class AgentSession {
 
   /**
    * Send a user message; resolves once it is stored, not when it is answered. Steers the agent if
-   * it is already running.
+   * it is already running. Resolves to whether the message was sent: `false` when it failed (see
+   * `error`) or the user moved to another conversation first, so the caller can give it back.
    */
   async prompt(
     text: string,
     images: ImageContent[] = [],
     documents: AttachedDocument[] = [],
-  ): Promise<void> {
-    if (!text.trim() && images.length === 0 && documents.length === 0) return;
+  ): Promise<boolean> {
+    if (!text.trim() && images.length === 0 && documents.length === 0) return false;
 
     this.error = undefined;
     // The message is for the conversation shown now. If the user starts another one while it is
@@ -281,20 +286,20 @@ export class AgentSession {
       const model = await this.#resolveModel();
       if (images.length > 0 && !acceptsImages(model)) throw new Error(IMAGES_UNSUPPORTED);
       if (documentLength(documents) > documentBudget(model)) throw new Error(DOCUMENTS_TOO_LONG);
-      if (!current()) return;
+      if (!current()) return false;
       await this.#configure(model);
       const ambient = [
         `Current time: ${new Date().toString()}`,
         ...(await this.#deps.host.beforeAgentStart(text)),
       ];
-      if (!current()) return;
+      if (!current()) return false;
       // Before the message, so a tool the agent calls for it finds the files. The model gets the
       // names they are stored under, which differ when one is taken.
       const names = await this.#deps.attachments.save(
         conversation.id,
         documents.map((document) => document.file),
       );
-      if (!current()) return;
+      if (!current()) return false;
       const stored = documents.map((document, i) => ({ ...document, name: names[i]! }));
       await conversation.submit(
         {
@@ -312,8 +317,10 @@ export class AgentSession {
         context,
       );
       await this.#record(conversation.id, text.trim() || stored[0]?.name || "");
+      return true;
     } catch (error) {
       this.error = errorMessage(error);
+      return false;
     } finally {
       this.onChange.emit();
     }

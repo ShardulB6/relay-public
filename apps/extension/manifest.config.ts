@@ -17,9 +17,12 @@ export default defineManifest({
   action: { default_title: "Open Relay" },
   background: { service_worker: "src/background.ts", type: "module" },
   side_panel: { default_path: "sidepanel.html" },
-  // SQLite (conversation storage) and QuickJS (the agent's scripts) are WebAssembly.
+  // SQLite (conversation storage) and QuickJS (the agent's scripts) are WebAssembly. Images and
+  // media load only from the extension or inline data: the model's replies are untrusted, and a
+  // remote image in one would carry whatever its URL holds to its server.
   content_security_policy: {
-    extension_pages: "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'",
+    extension_pages:
+      "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'; img-src 'self' data: blob:; media-src 'self' data: blob:",
   },
   permissions: ["sidePanel", "debugger", "tabs", "storage", "unlimitedStorage", "userScripts"],
   // Model providers. Granted hosts are exempt from CORS, so a response without CORS headers (an
