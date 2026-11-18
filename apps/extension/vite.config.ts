@@ -1,6 +1,8 @@
+import { existsSync, readdirSync } from "node:fs";
 import { readdir, readFile } from "node:fs/promises";
 import { createRequire } from "node:module";
-import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 import { crx } from "@crxjs/vite-plugin";
@@ -32,6 +34,25 @@ function pdfCMaps(): Plugin {
   };
 }
 
+/**
+ * Where the build goes. `RELAY_OUT_DIR` points every worktree at one folder, so the extension
+ * Chrome has loaded from it stays the same one (same ID, storage and sign-ins) across worktrees.
+ * Vite empties the folder before each build, so it must be missing, empty, or a previous build.
+ */
+function outDir(): string {
+  const configured = process.env.RELAY_OUT_DIR?.trim();
+  if (!configured) return "dist";
+  const directory = resolve(configured.replace(/^~(?=$|\/)/, homedir()));
+  if (
+    existsSync(directory) &&
+    readdirSync(directory).length > 0 &&
+    !existsSync(join(directory, "manifest.json"))
+  ) {
+    throw new Error(`RELAY_OUT_DIR (${directory}) is not empty and holds no extension build`);
+  }
+  return directory;
+}
+
 export default defineConfig(({ mode }) => ({
   plugins: [react(), tailwindcss(), crx({ manifest }), pdfCMaps()],
   resolve: {
@@ -40,6 +61,9 @@ export default defineConfig(({ mode }) => ({
     },
   },
   build: {
+    outDir: outDir(),
+    // Vite only empties an output folder outside the project when told to.
+    emptyOutDir: true,
     // Functions passed to `page.evaluate` are serialized as source, so they must not be
     // down-leveled into code that depends on bundler helpers.
     target: "esnext",

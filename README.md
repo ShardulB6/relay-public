@@ -55,6 +55,12 @@ pnpm build        # builds the extension into apps/extension/dist
    conversation, so they cannot be deleted one at a time. **Clear all history** in settings
    deletes them all: the side panel reloads and opens an empty database.
 
+To test several worktrees without loading each one, set `RELAY_OUT_DIR` (for example
+`export RELAY_OUT_DIR=~/relay-dev` in your shell profile) and load that folder once. Every
+worktree's `pnpm dev` and `pnpm build` then write there, so Chrome keeps the same extension, with
+its settings, sign-ins and conversations; reload it to pick up the latest build. The folder holds
+one build at a time, so run `pnpm dev` in one worktree at a time.
+
 | Command      | Does                                                                         |
 | ------------ | ---------------------------------------------------------------------------- |
 | `pnpm dev`   | Rebuilds the extension on every change. Reload the side panel to pick it up. |
